@@ -17,9 +17,9 @@ That's all. The installer builds MuskFlow (installing Rust first if you don't ha
 
 | Tier | Download | Best for |
 |---|---|---|
-| **lite** | ~110 MB | any laptop; fastest (English) |
-| **standard** | ~490 MB | the default; 25 European languages |
-| **max** | ~560 MB | most accurate, 99 languages incl. Hindi; wants Apple Silicon / a GPU |
+| **lite** | ~650 MB | any laptop; fastest (English) |
+| **standard** | ~1.8 GB | the default; 25 European languages |
+| **max** | ~3.1 GB | most accurate, 99 languages incl. Hindi; wants Apple Silicon / a GPU |
 
 Add or check tiers any time:
 
@@ -44,6 +44,7 @@ Dictate from your mic (speak, then press Enter):
 | `muskflow stream file.wav` | replays a file as live speech and measures key-up → text latency |
 | `muskflow devices` / `listen --mic "<name>"` | list mics / pick one |
 | `muskflow listen --save recordings/x.wav` | keep the recording for replay benchmarks |
+| `muskflow clean "text"` | runs the cleanup LLM on any text |
 | `muskflow bench --show` | runs every clip through every installed tier and compares accuracy, latency, CPU and size |
 
 Benchmark clips: `./scripts/make-bench-clips.sh` (macOS) synthesises 8 clips with references, and `./scripts/record-passages.sh` records *you* reading 6 passages, so `muskflow bench --clips recordings` tests your real voice.
@@ -57,6 +58,8 @@ Tuning flags: `--threads N`, `--step` / `--context` (streaming), `--hotwords a,b
 | `crates/mf-audio` | mic capture (real-time safe), 16 kHz resampling, Silero VAD, WAV loading |
 | `crates/mf-asr` | `Transcriber` / `Session` traits, Parakeet backends, LocalAgreement streaming committer |
 | `crates/mf-models` | the Lite / Standard / Max tiers |
+| `crates/mf-llm` | llama.cpp runtime: prefix-state cache, prompt-lookup speculative decoding |
+| `crates/mf-cleanup` | rules, LLM prompt, faithfulness guard |
 | `crates/mf-eval` | WER and text normalisation for benchmarks |
 | `apps/cli` | the `muskflow` binary (`transcribe`, `stream`, `listen`, `devices`, `bench`) |
 | `install.sh` | build + model download, by tier |
@@ -64,4 +67,4 @@ Tuning flags: `--threads N`, `--step` / `--context` (streaming), `--hotwords a,b
 
 ## License
 
-[Apache-2.0](LICENSE). Models keep their own licences (Parakeet: CC-BY-4.0).
+[Apache-2.0](LICENSE). Models keep their own licences (Parakeet: CC-BY-4.0, Whisper: MIT, Qwen3/Qwen3.5: Apache-2.0).

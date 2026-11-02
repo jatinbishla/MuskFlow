@@ -1,7 +1,9 @@
 //! `muskflow bench`: every clip through every tier, side by side.
 //!
 //! The product bar is that Lite is as accurate as Max, so the report leads with
-//! the accuracy gap between tiers, not just each tier's own numbers.
+//! the accuracy gap between tiers, not just each tier's own numbers. Two stages
+//! are scored: the ASR against what was *said* (`<id>.txt`), and the final
+//! cleaned text against what the user *meant* (`<id>.clean.txt`).
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -9,24 +11,45 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use mf_audio::load_wav_16k;
+use mf_cleanup::Cleaned;
 use mf_eval::{Wer, wer};
 use mf_models::{Tier, dir_size};
 
-use crate::{Common, Replay, load_engine, replay};
+use crate::{Common, Replay, llm_path, load_cleaner, load_engine, replay};
 
 struct Clip {
     id: String,
     wav: PathBuf,
+    /// What was said.
     reference: String,
+    /// What the speaker meant, if known.
+    clean: Option<String>,
     pcm: Vec<f32>,
+}
+
+struct ClipResult {
+    asr: Replay,
+    asr_wer: Wer,
+    cleaned: Option<Cleaned>,
+    final_wer: Option<Wer>,
+    /// Final WER if we only ran the deterministic rules (no LLM): the bar the LLM must beat.
+    rules_wer: Option<Wer>,
+}
+
+impl ClipResult {
+    /// Key-up → final text: ASR finish plus cleanup.
+    fn total(&self) -> Duration {
+        self.asr.latency + self.cleaned.as_ref().map_or(Duration::ZERO, |c| c.time)
+    }
 }
 
 struct TierRun {
     tier: Tier,
     load: Duration,
     size_mb: f64,
-    /// Per clip, same order as the clip list.
-    results: Vec<(Replay, Wer)>,
+    /// Cleanup LLM used, if any.
+    llm: Option<String>,
+    results: Vec<ClipResult>,
 }
 
 pub fn run(
@@ -35,6 +58,7 @@ pub fn run(
     clips_dir: &Path,
     fast: bool,
     show: bool,
+    no_cleanup: bool,
     out: Option<&Path>,
 ) -> Result<()> {
     let tiers: Vec<Tier> = tiers.iter().map(|t| t.parse()).collect::<Result<_>>()?;
@@ -58,29 +82,61 @@ pub fn run(
 
     let mut runs = Vec::new();
     for tier in tiers {
-        if !tier.is_installed(&c.models) {
+        if !tier.asr_path(&c.models).is_dir() {
             eprintln!("· {tier}: not installed, skipping (muskflow models install {tier})");
             continue;
         }
         let t = Instant::now();
         let engine = load_engine(c, &tier.asr_path(&c.models))?;
+        let cleaner = if no_cleanup || !llm_path(c, tier).is_file() {
+            None
+        } else {
+            Some(load_cleaner(c, &llm_path(c, tier))?)
+        };
         let load = t.elapsed();
+
         let mut results = Vec::new();
         for clip in &clips {
-            let r = replay(&engine, &clip.pcm, fast, false)?;
-            let w = wer(&clip.reference, &r.text);
+            let asr = replay(&engine, &clip.pcm, fast, false)?;
+            let asr_wer = wer(&clip.reference, &asr.text);
+            let cleaned = match &cleaner {
+                Some(cl) => Some(cl.clean(&asr.text)?),
+                None => None,
+            };
+            let final_wer = match (&cleaned, &clip.clean) {
+                (Some(cd), Some(reference)) => Some(wer(reference, &cd.text)),
+                _ => None,
+            };
+            let rules_wer = clip
+                .clean
+                .as_ref()
+                .map(|reference| wer(reference, &mf_cleanup::rules::clean(&asr.text)));
+            let r = ClipResult {
+                asr,
+                asr_wer,
+                cleaned,
+                final_wer,
+                rules_wer,
+            };
             eprintln!(
-                "  {tier:<8} {:<12} WER {:>5.1}%  key-up → text {:>5.0} ms",
+                "  {tier:<8} {:<16} ASR WER {:>5.1}%  final WER {:>6}  key-up → text {:>5.0} ms",
                 clip.id,
-                100.0 * w.rate(),
-                r.latency.as_secs_f64() * 1e3
+                100.0 * r.asr_wer.rate(),
+                r.final_wer
+                    .map_or("—".into(), |w| format!("{:.1}%", 100.0 * w.rate())),
+                r.total().as_secs_f64() * 1e3
             );
-            results.push((r, w));
+            results.push(r);
+        }
+        let mut size = dir_size(&tier.asr_path(&c.models));
+        if cleaner.is_some() {
+            size += std::fs::metadata(llm_path(c, tier)).map_or(0, |m| m.len());
         }
         runs.push(TierRun {
             tier,
             load,
-            size_mb: dir_size(&tier.asr_path(&c.models)) as f64 / 1e6,
+            size_mb: size as f64 / 1e6,
+            llm: cleaner.as_ref().map(|c| c.llm().name().to_string()),
             results,
         });
     }
@@ -116,6 +172,9 @@ fn load_clips(dir: &Path) -> Result<Vec<Clip>> {
             eprintln!("· skipping {} (no {})", wav.display(), txt.display());
             continue;
         };
+        let clean = std::fs::read_to_string(wav.with_extension("clean.txt"))
+            .ok()
+            .map(|s| s.trim().to_string());
         let id = wav
             .file_stem()
             .unwrap_or_default()
@@ -126,6 +185,7 @@ fn load_clips(dir: &Path) -> Result<Vec<Clip>> {
             pcm: load_wav_16k(&wav)?,
             wav,
             reference: reference.trim().to_string(),
+            clean,
         });
     }
     clips.sort_by(|a, b| a.id.cmp(&b.id));
@@ -144,18 +204,34 @@ fn percentile(mut v: Vec<f64>, p: f64) -> f64 {
     v[((v.len() - 1) as f64 * p).round() as usize]
 }
 
+fn sum(ws: impl Iterator<Item = Wer>) -> Wer {
+    ws.fold(Wer::default(), |a, b| a + b)
+}
+
+fn gap(rate: f32, best: f32) -> String {
+    if rate <= best {
+        "—".into()
+    } else {
+        format!("+{:.1} pts", 100.0 * (rate - best))
+    }
+}
+
 fn render(clips: &[Clip], runs: &[TierRun], fast: bool, show: bool) -> String {
     let mut s = String::new();
-    let best = runs
+    let asr_rate = |r: &TierRun| sum(r.results.iter().map(|x| x.asr_wer)).rate();
+    let final_rate = |r: &TierRun| {
+        let ws: Vec<Wer> = r.results.iter().filter_map(|x| x.final_wer).collect();
+        (!ws.is_empty()).then(|| sum(ws.into_iter()).rate())
+    };
+    let best_asr = runs.iter().map(asr_rate).fold(f32::INFINITY, f32::min);
+    let best_final = runs
         .iter()
-        .map(|r| {
-            r.results
-                .iter()
-                .map(|(_, w)| *w)
-                .fold(Wer::default(), |a, b| a + b)
-                .rate()
-        })
+        .filter_map(final_rate)
         .fold(f32::INFINITY, f32::min);
+    let rules_rate = |r: &TierRun| {
+        let ws: Vec<Wer> = r.results.iter().filter_map(|x| x.rules_wer).collect();
+        (!ws.is_empty()).then(|| sum(ws.into_iter()).rate())
+    };
 
     let _ = writeln!(
         s,
@@ -164,55 +240,69 @@ fn render(clips: &[Clip], runs: &[TierRun], fast: bool, show: bool) -> String {
     );
     let _ = writeln!(
         s,
-        "| Tier | ASR model | Size | Load | WER (all clips) | Gap to best | Worst clip | Key-up → text p50 / max | CPU while speaking |"
+        "| Tier | Models | Size | Load | **Final WER** (vs meant) | Gap | Rules-only WER | ASR WER (vs said) | Gap | Key-up → text p50 / max | Cleanup p50 | Guard fallbacks | CPU while speaking |"
     );
-    let _ = writeln!(s, "|---|---|---|---|---|---|---|---|---|");
+    let _ = writeln!(s, "|---|---|---|---|---|---|---|---|---|---|---|---|---|");
     for r in runs {
-        let total = r
+        let fin = final_rate(r);
+        let total: Vec<f64> = r
             .results
             .iter()
-            .map(|(_, w)| *w)
-            .fold(Wer::default(), |a, b| a + b);
-        let (worst_i, worst) = r
-            .results
-            .iter()
-            .enumerate()
-            .max_by(|a, b| a.1.1.rate().total_cmp(&b.1.1.rate()))
-            .map(|(i, (_, w))| (i, w.rate()))
-            .unwrap_or((0, 0.0));
-        let lat: Vec<f64> = r
-            .results
-            .iter()
-            .map(|(x, _)| x.latency.as_secs_f64() * 1e3)
+            .map(|x| x.total().as_secs_f64() * 1e3)
             .collect();
-        let audio: f32 = r.results.iter().map(|(x, _)| x.audio_secs).sum();
+        let clean_ms: Vec<f64> = r
+            .results
+            .iter()
+            .filter_map(|x| x.cleaned.as_ref())
+            .map(|c| c.time.as_secs_f64() * 1e3)
+            .collect();
+        let fallbacks = r
+            .results
+            .iter()
+            .filter(|x| {
+                x.cleaned
+                    .as_ref()
+                    .is_some_and(|c| c.path == mf_cleanup::Path::Fallback)
+            })
+            .count();
+        let audio: f32 = r.results.iter().map(|x| x.asr.audio_secs).sum();
         let decode: f32 = r
             .results
             .iter()
-            .map(|(x, _)| x.stats.decode_time.as_secs_f32())
+            .map(|x| x.asr.stats.decode_time.as_secs_f32())
             .sum();
         let _ = writeln!(
             s,
-            "| **{}** | {} | {:.0} MB | {:.1} s | **{}** | {} | {} ({}) | {:.0} / {:.0} ms | {:.0}% |",
+            "| **{}** | {}{} | {:.0} MB | {:.1} s | **{}** | {} | {} | {} | {} | {:.0} / {:.0} ms | {} | {} | {:.0}% |",
             r.tier,
             r.tier.asr_label(),
+            r.llm
+                .as_ref()
+                .map_or(String::new(), |name| format!(" + {name}")),
             r.size_mb,
             r.load.as_secs_f32(),
-            pct(total.rate()),
-            if total.rate() <= best {
-                "—".to_string()
+            fin.map_or("—".into(), pct),
+            fin.map_or("—".into(), |f| gap(f, best_final)),
+            rules_rate(r).map_or("—".into(), pct),
+            pct(asr_rate(r)),
+            gap(asr_rate(r), best_asr),
+            percentile(total.clone(), 0.5),
+            percentile(total, 1.0),
+            if clean_ms.is_empty() {
+                "—".into()
             } else {
-                format!("+{:.1} pts", 100.0 * (total.rate() - best))
+                format!("{:.0} ms", percentile(clean_ms, 0.5))
             },
-            pct(worst),
-            clips[worst_i].id,
-            percentile(lat.clone(), 0.5),
-            percentile(lat, 1.0),
+            if r.llm.is_some() {
+                format!("{fallbacks}/{}", r.results.len())
+            } else {
+                "—".into()
+            },
             100.0 * decode / audio
         );
     }
 
-    let _ = writeln!(s, "\n### WER per clip\n");
+    let _ = writeln!(s, "\n### Per clip: final WER (ASR WER)\n");
     let _ = write!(s, "| Clip |");
     for r in runs {
         let _ = write!(s, " {} |", r.tier);
@@ -225,7 +315,9 @@ fn render(clips: &[Clip], runs: &[TierRun], fast: bool, show: bool) -> String {
     for (i, clip) in clips.iter().enumerate() {
         let _ = write!(s, "| {} |", clip.id);
         for r in runs {
-            let _ = write!(s, " {} |", pct(r.results[i].1.rate()));
+            let x = &r.results[i];
+            let fin = x.final_wer.map_or("—".into(), |w| pct(w.rate()));
+            let _ = write!(s, " {fin} ({}) |", pct(x.asr_wer.rate()));
         }
         let _ = writeln!(s);
     }
@@ -233,22 +325,33 @@ fn render(clips: &[Clip], runs: &[TierRun], fast: bool, show: bool) -> String {
     if show {
         let _ = writeln!(s, "\n### Transcripts\n");
         for (i, clip) in clips.iter().enumerate() {
-            let _ = writeln!(
-                s,
-                "**{}** ({})\n\n- reference: {}",
-                clip.id,
-                clip.wav.display(),
-                clip.reference
-            );
+            let _ = writeln!(s, "**{}** ({})\n", clip.id, clip.wav.display());
+            let _ = writeln!(s, "- said: {}", clip.reference);
+            if let Some(c) = &clip.clean {
+                let _ = writeln!(s, "- meant: {c}");
+            }
             for r in runs {
-                let _ = writeln!(s, "- {}: {}", r.tier, r.results[i].0.text);
+                let x = &r.results[i];
+                let _ = writeln!(s, "- {} ASR: {}", r.tier, x.asr.text);
+                if let Some(cd) = &x.cleaned {
+                    let tag = match cd.path {
+                        mf_cleanup::Path::Rules => "rules".to_string(),
+                        mf_cleanup::Path::Llm => "llm".to_string(),
+                        mf_cleanup::Path::Fallback => format!(
+                            "fallback: {}; llm said \"{}\"",
+                            cd.verdict.as_ref().and_then(|v| v.reason).unwrap_or("?"),
+                            cd.llm_text.as_deref().unwrap_or("")
+                        ),
+                    };
+                    let _ = writeln!(s, "- {} final ({tag}): {}", r.tier, cd.text);
+                }
             }
             let _ = writeln!(s);
         }
     }
     let _ = writeln!(
         s,
-        "\nWER ignores case, punctuation, number formatting and fillers (uh/um): fillers are the cleanup LLM's job."
+        "\nWER ignores case, punctuation, number formatting and fillers. Final WER also counts uncorrected self-corrections (\"Thursday, no wait, Friday\" should become \"Friday\") and anything the LLM added."
     );
     s
 }

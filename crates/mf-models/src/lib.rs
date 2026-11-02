@@ -58,21 +58,52 @@ impl Tier {
         models.join(self.asr_dir())
     }
 
-    /// Everything this tier needs on disk.
-    pub fn artifacts(self) -> Vec<Artifact> {
-        vec![
-            Artifact::silero_vad(),
-            Artifact::sherpa_asr(self.asr_dir(), self.download_mb()),
-        ]
-    }
-
-    /// Approximate download size of this tier's models, in MB.
-    pub fn download_mb(self) -> u32 {
+    /// Approximate ASR download, in MB.
+    fn asr_mb(self) -> u32 {
         match self {
             Tier::Lite => 108,
             Tier::Standard => 487,
             Tier::Max => 564,
         }
+    }
+
+    /// Cleanup LLM: (Hugging Face repo, GGUF file, approx MB).
+    fn llm(self) -> (&'static str, &'static str, u32) {
+        match self {
+            Tier::Lite => ("unsloth/Qwen3.5-0.8B-GGUF", "Qwen3.5-0.8B-Q4_K_M.gguf", 533),
+            Tier::Standard => ("unsloth/Qwen3.5-2B-GGUF", "Qwen3.5-2B-Q4_K_M.gguf", 1281),
+            Tier::Max => (
+                "unsloth/Qwen3-4B-Instruct-2507-GGUF",
+                "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+                2497,
+            ),
+        }
+    }
+
+    pub fn llm_label(self) -> &'static str {
+        match self {
+            Tier::Lite => "Qwen3.5 0.8B Q4_K_M",
+            Tier::Standard => "Qwen3.5 2B Q4_K_M",
+            Tier::Max => "Qwen3 4B Instruct 2507 Q4_K_M",
+        }
+    }
+
+    pub fn llm_path(self, models: &Path) -> PathBuf {
+        models.join(self.llm().1)
+    }
+
+    /// Everything this tier needs on disk.
+    pub fn artifacts(self) -> Vec<Artifact> {
+        vec![
+            Artifact::silero_vad(),
+            Artifact::sherpa_asr(self.asr_dir(), self.asr_mb()),
+            Artifact::hf_file(self.llm().0, self.llm().1, self.llm().2),
+        ]
+    }
+
+    /// Approximate download size of this tier's models, in MB.
+    pub fn download_mb(self) -> u32 {
+        self.asr_mb() + self.llm().2 + 2
     }
 
     /// Whether this tier's models are downloaded.

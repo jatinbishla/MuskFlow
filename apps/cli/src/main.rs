@@ -13,6 +13,8 @@ use mf_asr::{CommitterConfig, Engine, SessionStats, Word};
 use mf_audio::{
     MicCapture, SpeechTrimmer, VadConfig, list_inputs, load_wav_16k, samples_to_secs, save_wav_16k,
 };
+use mf_cleanup::Cleaner;
+use mf_llm::{Llm, LlmConfig};
 use mf_models::{Tier, parse_tiers};
 
 #[derive(Parser)]
@@ -39,6 +41,12 @@ pub(crate) struct Common {
     /// Use this ASR model directory (inside --models) instead of the tier's.
     #[arg(long, global = true)]
     asr: Option<String>,
+    /// Use this cleanup LLM (a .gguf file inside --models) instead of the tier's.
+    #[arg(long, global = true)]
+    pub(crate) llm: Option<String>,
+    /// LLM layers to run on the GPU (Metal/CUDA/Vulkan); 0 = CPU only.
+    #[arg(long, default_value_t = 999, global = true)]
+    gpu_layers: u32,
     /// Inference threads; 0 = all cores, capped at 8.
     #[arg(long, default_value_t = 0, global = true)]
     threads: i32,
@@ -102,10 +110,15 @@ enum Cmd {
         /// Print every hypothesis next to its reference.
         #[arg(long)]
         show: bool,
+        /// Score the ASR only, without the cleanup LLM.
+        #[arg(long)]
+        no_cleanup: bool,
         /// Also write the report (markdown) to this file.
         #[arg(long)]
         out: Option<PathBuf>,
     },
+    /// Clean up a piece of dictated text with the tier's LLM (reads stdin if no text given).
+    Clean { text: Option<String> },
 }
 
 #[derive(Subcommand)]
@@ -138,8 +151,18 @@ fn main() -> Result<()> {
             clips,
             fast,
             show,
+            no_cleanup,
             out,
-        } => bench::run(&cli.common, tiers, clips, *fast, *show, out.as_deref()),
+        } => bench::run(
+            &cli.common,
+            tiers,
+            clips,
+            *fast,
+            *show,
+            *no_cleanup,
+            out.as_deref(),
+        ),
+        Cmd::Clean { text } => clean(&cli.common, text.as_deref()),
     }
 }
 
@@ -159,12 +182,77 @@ fn threads(c: &Common) -> i32 {
     std::thread::available_parallelism().map_or(4, |n| n.get().min(8) as i32)
 }
 
+/// The cleanup LLM file: `--llm` if given, otherwise the tier's.
+pub(crate) fn llm_path(c: &Common, tier: Tier) -> PathBuf {
+    match &c.llm {
+        Some(file) => c.models.join(file),
+        None => tier.llm_path(&c.models),
+    }
+}
+
 /// The ASR model directory: `--asr` if given, otherwise the tier's.
 fn asr_dir(c: &Common) -> PathBuf {
     match &c.asr {
         Some(dir) => c.models.join(dir),
         None => c.tier.asr_path(&c.models),
     }
+}
+
+pub(crate) fn load_cleaner(c: &Common, path: &Path) -> Result<Cleaner> {
+    let t = Instant::now();
+    let cfg = LlmConfig {
+        gpu_layers: c.gpu_layers,
+        n_threads: threads(c),
+        ..Default::default()
+    };
+    let llm = Llm::load(path, cfg)?;
+    eprintln!(
+        "· loaded {} in {}{}",
+        llm.name(),
+        ms(t.elapsed()),
+        if llm.speculative() {
+            " (prompt-lookup decoding)"
+        } else {
+            ""
+        }
+    );
+    let cleaner = Cleaner::new(llm);
+    cleaner.clean("um warm up the the model")?; // first call pays for Metal shader compilation
+    Ok(cleaner)
+}
+
+fn clean(c: &Common, text: Option<&str>) -> Result<()> {
+    let text = match text {
+        Some(t) => t.to_string(),
+        None => std::io::read_to_string(std::io::stdin())?,
+    };
+    let cleaner = load_cleaner(c, &llm_path(c, c.tier))?;
+    let r = cleaner.clean(&text)?;
+    println!("{}", r.text);
+    let mut info = format!("· {:?} in {}", r.path, ms(r.time));
+    if let Some(g) = &r.generation {
+        info += &format!(
+            " · prompt {} tok ({} new) in {} · {} tok in {} ({} passes)",
+            g.prompt_tokens,
+            g.prefilled_tokens,
+            ms(g.prefill_time),
+            g.generated_tokens,
+            ms(g.decode_time),
+            g.decode_passes
+        );
+    }
+    if let Some(v) = &r.verdict
+        && !v.ok()
+    {
+        info += &format!(
+            " · guard: {} {:?} · llm said: {}",
+            v.reason.unwrap_or(""),
+            v.added,
+            r.llm_text.as_deref().unwrap_or("")
+        );
+    }
+    eprintln!("{info}");
+    Ok(())
 }
 
 fn list_models(models: &Path) -> Result<()> {

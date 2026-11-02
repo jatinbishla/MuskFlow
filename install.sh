@@ -36,10 +36,10 @@ if [ ${#TIERS[@]} -eq 0 ]; then
   RAM=$(ram_gb)
   if [ "$RAM" -lt 8 ]; then REC=lite; else REC=standard; fi
   say "Which model tier? (this machine: ${RAM} GB RAM → recommended: $REC)"
-  echo "  1) lite      ~110 MB  fastest, any laptop (English)"
-  echo "  2) standard  ~490 MB  best balance (25 European languages)"
-  echo "  3) max       ~560 MB  most accurate, 99 languages incl. Hindi; needs a fast GPU/Apple Silicon to feel instant"
-  echo "  4) all       ~1.2 GB  all three (to compare them with \`muskflow bench\`)"
+  echo "  1) lite      ~650 MB  fastest, any laptop (English)"
+  echo "  2) standard  ~1.8 GB  best balance (25 European languages)"
+  echo "  3) max       ~3.1 GB  most accurate, 99 languages incl. Hindi; needs a fast GPU/Apple Silicon to feel instant"
+  echo "  4) all       ~5.5 GB  all three (to compare them with \`muskflow bench\`)"
   read -r -p "Choose 1-4 [$REC]: " choice
   case "${choice:-}" in
     1) TIERS=(lite) ;; 2) TIERS=(standard) ;; 3) TIERS=(max) ;; 4) TIERS=(all) ;;

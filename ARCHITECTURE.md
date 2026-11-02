@@ -355,9 +355,9 @@ Strategy chain per app (learned: remember which method worked per app id):
 
 | Tier | Target machine | ASR | Cleanup | Disk | Active RAM |
 |---|---|---|---|---|---|
-| **Lite** | 8 GB, CPU-only / old Intel | Parakeet-TDT 110M int8 (committer) | `muskflow-clean-0.6b` Q4 + rules | ~0.8 GB | ~0.9 GB |
-| **Standard** | Apple Silicon 8–16 GB, any GPU laptop | Parakeet-TDT 0.6B v3 int8 (committer) | `muskflow-clean-1.5b` Q4_K_M | ~1.4 GB | ~1.6 GB |
-| **Max** | 16 GB+ Apple Silicon / 8 GB VRAM | Whisper large-v3-turbo, decoded by VAD phrase (99 languages) | `muskflow-clean-1.5b` (Clean) + `muskflow-polish-4b` (Polish/Command) | ~4.5 GB | ~4 GB |
+| **Lite** | 8 GB, CPU-only / old Intel | Parakeet-TDT 110M int8 (committer) | Qwen3.5 0.8B Q4_K_M (→ fine-tuned `muskflow-clean-lite`) + rules | ~0.65 GB | ~1 GB |
+| **Standard** | Apple Silicon 8–16 GB, any GPU laptop | Parakeet-TDT 0.6B v3 int8 (committer) | Qwen3.5 2B Q4_K_M | ~1.8 GB | ~2.2 GB |
+| **Max** | 16 GB+ Apple Silicon / 8 GB VRAM | Whisper large-v3-turbo, decoded by VAD phrase (99 languages) | Qwen3 4B Instruct 2507 Q4_K_M | ~3.1 GB | ~4 GB |
 
 **Lite must be as accurate as Max.** Lite users are the people with the weakest laptops, and they deserve the same result. So:
 

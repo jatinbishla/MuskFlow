@@ -44,6 +44,16 @@ impl Artifact {
         }
     }
 
+    /// A single GGUF file from a Hugging Face repo.
+    pub(crate) fn hf_file(repo: &str, file: &str, approx_mb: u32) -> Artifact {
+        Artifact {
+            name: file.to_string(),
+            url: format!("https://huggingface.co/{repo}/resolve/main/{file}"),
+            format: Format::File,
+            approx_mb,
+        }
+    }
+
     pub(crate) fn sherpa_asr(dir: &str, approx_mb: u32) -> Artifact {
         Artifact {
             name: dir.to_string(),

@@ -82,3 +82,32 @@ Full report with transcripts: [bench/2026-11-03-asr-tiers.md](bench/2026-11-03-a
 - Max is the most accurate, but on a CPU-only Air it's too slow to use. It needs the GPU/ANE.
 - Lite's errors are names and rare words ("Rediscon", "postger's", "Joden", "pria"), plus fillers misheard as words. That's exactly what hotwords, the context-aware cleanup LLM and distilling Max into Lite are meant to fix.
 - Gap to close: **5.4 points of WER between Lite and Max**.
+
+## 2026-11-03 — cleanup LLM, all three tiers (speech → text → cleaned)
+
+Full report: [bench/2026-11-03-cleanup-tiers.md](bench/2026-11-03-cleanup-tiers.md) (fast replay, so the ASR latency column there isn't realistic; cleanup timings are). Final WER is scored against what the speaker *meant* (`<id>.clean.txt`): fillers gone, self-corrections resolved.
+
+| Tier | Cleanup LLM | Final WER | Rules-only WER | Cleanup p50 | Guard fallbacks |
+|---|---|---|---|---|---|
+| Lite | Qwen3.5 0.8B | 8.7% | 12.2% | 331 ms | 1/8 |
+| Standard | Qwen3.5 2B | 6.1% | 9.9% | 651 ms | 1/8 |
+| Max | Qwen3 4B Instruct 2507 | **2.3%** | 6.1% | 892 ms | 0/8 |
+
+Model selection (same clips, same prompt):
+
+| Tier | Qwen3.5 (hybrid) | Qwen3 (transformer) | Picked |
+|---|---|---|---|
+| Lite | **8.7%**, 334 ms (0.8B) | 9.5%, 392 ms (0.6B) | Qwen3.5 |
+| Standard | **6.1%**, 659 ms (2B) | 8.0%, 351 ms (1.7B) | Qwen3.5 (accuracy first) |
+| Max | 4.6%, 1,473 ms (4B) | **2.3%, 825 ms** (4B-Instruct-2507) | Qwen3 |
+
+What made the difference:
+- **Prefix-state cache**: instructions and examples are computed once and the state is snapshotted; each dictation only prefills its own ~50 tokens. Standard went from 1,145 ms to 403 ms per call.
+- **Persistent context** instead of one per call.
+- **Guard v2**: rejects dropped clauses, but allows words retracted by a self-correction ("Wednesday at 3 pm? No, actually, make that Thursday").
+- **Prompt**: change as few words as possible, keep word order, and treat ASR-misheard fillers ("uh" → "I'll"/"all", "um" → "I'm") as fillers.
+
+Open issues:
+- Qwen3.5 is hybrid (gated delta net), so prompt-lookup speculation is off for Lite/Standard. Speculation for hybrids needs state snapshots per draft.
+- Lite's 0.8B still misses some self-corrections, so it's the first fine-tuning target. Gap to Max: 6.5 pts.
+- No fine-tuning yet: everything above is zero-shot plus examples.
