@@ -47,3 +47,24 @@ v3 dictation: "billing" was heard as "building" every time, even when the speake
 | v5 (first-word fix) | 52 s | **4.11 s tail in 776 ms** | 1,483 ms | first words kept ✓; last ~4 s never stabilised (continuous fast speech), and decoding ran at ~5× real time (Air thermals?) |
 
 Open issue: Enter → text depends on how much text is still unstable at key-up and on the in-flight decode. Ideas: ignore fillers when checking agreement; cancel or parallelise the in-flight decode on key-up; ANE/GPU decoding.
+
+## 2026-11-03 — latency spike fix (fast, filler-heavy speech)
+
+New clip `fast.wav`: 21 s at 215 wpm, continuous, lots of "uh/um". Before the fix: a 5.7 s unconfirmed tail at key-up, ~600 ms key-up → text.
+
+Root causes, found by logging every agreement decision and every raw decode:
+1. Fillers flip between decodes ("uh" ↔ "a", "um" ↔ "I'm"), breaking prefix agreement.
+2. Parakeet drops words at the start of a window, so two decodes disagree on where they begin.
+3. **Starting a decode mid-word makes Parakeet emit nothing for seconds of clear speech.** The silence rule then discarded that audio, so words were lost.
+
+Fixes: agreement ignores fillers and tolerates ≤3 dropped lead words (keeping the fuller version); left context snaps to a committed word's start; context 1.5 s; silence is confirmed by Silero VAD rather than by an empty decode; the final decode restores lead words it dropped.
+
+| Clip | Key-up → text (3 runs) | CPU while speaking | Transcript |
+|---|---|---|---|
+| fast (21 s) | 291 / 415 / 294 ms | 36–41 % | complete |
+| dictation (17 s) | 283 / 302 / 391 ms | 35–36 % | complete |
+| pauses (16 s) | 231 / 330 / 337 ms | 29–30 % | complete |
+
+`listen --save recordings/x.wav` now records real sessions so they can be replayed with `stream` (recordings/ is gitignored).
+
+Live check (jatin-01, 52 s, MacBook Air): transcript complete with first words kept, but Enter → text 1,442 ms = final decode 563 ms + ~880 ms waiting for the in-flight decode. Replaying the same recording: average decode ≈ 370 ms, final ≈ 500 ms. **The remaining latency is decode speed on CPU**, so the next lever is GPU/ANE inference.

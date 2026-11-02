@@ -5,6 +5,23 @@ use sherpa_onnx::LinearResampler;
 
 use crate::SAMPLE_RATE;
 
+/// Writes 16 kHz mono f32 PCM as a 16-bit WAV.
+pub fn save_wav_16k(path: &Path, pcm: &[f32]) -> Result<()> {
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: SAMPLE_RATE,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut w = hound::WavWriter::create(path, spec)
+        .with_context(|| format!("could not create {}", path.display()))?;
+    for &x in pcm {
+        w.write_sample((x.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)?;
+    }
+    w.finalize()?;
+    Ok(())
+}
+
 /// Loads any PCM WAV (int or float, any rate, any channel count) as 16 kHz mono f32.
 pub fn load_wav_16k(path: &Path) -> Result<Vec<f32>> {
     let mut reader = hound::WavReader::open(path)

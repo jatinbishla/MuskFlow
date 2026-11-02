@@ -88,6 +88,7 @@ pub enum Engine {
         asr: ParakeetTranscriber,
         hotwords: Vec<String>,
         cfg: CommitterConfig,
+        vad: Option<mf_audio::SpeechTrimmer>,
     },
     Streaming(StreamingParakeet),
 }
@@ -115,7 +116,16 @@ impl Engine {
             asr: ParakeetTranscriber::load(&cfg)?,
             hotwords,
             cfg: CommitterConfig::default(),
+            vad: None,
         })
+    }
+
+    /// Lets the offline committer use VAD to tell silence from dropped speech. No-op for streaming models.
+    pub fn with_vad(mut self, trimmer: mf_audio::SpeechTrimmer) -> Self {
+        if let Self::Offline { vad, .. } = &mut self {
+            *vad = Some(trimmer);
+        }
+        self
     }
 
     /// Tunes how often an offline model re-decodes while the user speaks. No-op for streaming models.
@@ -135,8 +145,17 @@ impl Engine {
 
     pub fn session(&self) -> Box<dyn Session + Send + '_> {
         match self {
-            Self::Offline { asr, hotwords, cfg } => {
-                Box::new(Committer::new(asr, hotwords.clone(), cfg.clone()))
+            Self::Offline {
+                asr,
+                hotwords,
+                cfg,
+                vad,
+            } => {
+                let c = Committer::new(asr, hotwords.clone(), cfg.clone());
+                Box::new(match vad {
+                    Some(v) => c.with_vad(v),
+                    None => c,
+                })
             }
             Self::Streaming(s) => Box::new(s.session()),
         }

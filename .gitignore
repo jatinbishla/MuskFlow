@@ -3,3 +3,4 @@
 !/models/manifest.json
 *.part
 .DS_Store
+/recordings

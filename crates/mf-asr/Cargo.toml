@@ -7,5 +7,6 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+mf-audio.workspace = true
 sherpa-onnx.workspace = true
 log.workspace = true

@@ -8,7 +8,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use mf_asr::{CommitterConfig, Engine, ParakeetConfig, ParakeetTranscriber, Transcriber, Word};
-use mf_audio::{MicCapture, SpeechTrimmer, VadConfig, list_inputs, load_wav_16k, samples_to_secs};
+use mf_audio::{
+    MicCapture, SpeechTrimmer, VadConfig, list_inputs, load_wav_16k, samples_to_secs, save_wav_16k,
+};
 
 #[derive(Parser)]
 #[command(
@@ -48,7 +50,7 @@ struct Common {
     #[arg(long, default_value_t = 1.0, global = true)]
     step: f32,
     /// Seconds of already-committed audio re-fed as left context (offline models).
-    #[arg(long, default_value_t = 1.0, global = true)]
+    #[arg(long, default_value_t = 1.5, global = true)]
     context: f32,
 }
 
@@ -73,6 +75,9 @@ enum Cmd {
         /// Input device: part of its name or id (see `muskflow devices`). Default: system input.
         #[arg(long)]
         mic: Option<String>,
+        /// Also save the recording as a 16 kHz WAV (replay it later with `stream`).
+        #[arg(long)]
+        save: Option<PathBuf>,
     },
     /// List microphones.
     Devices,
@@ -84,7 +89,7 @@ fn main() -> Result<()> {
     match &cli.cmd {
         Cmd::Transcribe { wav, no_vad } => transcribe(&cli.common, wav, *no_vad),
         Cmd::Stream { wav, fast } => stream(&cli.common, wav, *fast),
-        Cmd::Listen { mic } => listen(&cli.common, mic.as_deref()),
+        Cmd::Listen { mic, save } => listen(&cli.common, mic.as_deref(), save.as_deref()),
         Cmd::Devices => devices(),
     }
 }
@@ -129,7 +134,8 @@ fn load_engine(c: &Common) -> Result<Engine> {
         &c.provider,
         c.hotwords.clone(),
     )?
-    .with_committer(committer);
+    .with_committer(committer)
+    .with_vad(load_vad(c)?);
     engine.warm_up()?;
     eprintln!("· loaded {} in {}", engine.name(), ms(t.elapsed()));
     Ok(engine)
@@ -209,7 +215,7 @@ fn stream(c: &Common, wav: &Path, fast: bool) -> Result<()> {
     Ok(())
 }
 
-fn listen(c: &Common, device: Option<&str>) -> Result<()> {
+fn listen(c: &Common, device: Option<&str>, save: Option<&Path>) -> Result<()> {
     let engine = load_engine(c)?;
     let vad = load_vad(c)?;
 
@@ -253,6 +259,10 @@ fn listen(c: &Common, device: Option<&str>) -> Result<()> {
         let peak = mic.peak();
         mic.stop();
         let (hyp, stats, finish, all) = worker.join().expect("ASR worker panicked")?;
+        if let Some(path) = save {
+            save_wav_16k(path, &all)?;
+            eprintln!("· saved recording to {}", path.display());
+        }
 
         let peak_db = 20.0 * peak.max(1e-9).log10();
         if peak < 1e-3 {

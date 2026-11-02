@@ -9,12 +9,17 @@
 use std::time::Instant;
 
 use anyhow::Result;
+use mf_audio::SpeechTrimmer;
 
 use crate::{Hypothesis, Session, SessionStats, Transcriber, Word, join_words};
 
 const SAMPLE_RATE: f32 = 16_000.0;
 /// Audio kept in the window when a decode finds no words.
 const SILENCE_KEEP_SECS: f32 = 0.5;
+/// Audio kept before a word when snapping the context start to it.
+const WORD_LEAD_SECS: f32 = 0.05;
+/// Empty decodes tolerated while VAD still hears speech.
+const MAX_EMPTY_OVER_SPEECH: u32 = 4;
 
 #[derive(Debug, Clone)]
 pub struct CommitterConfig {
@@ -38,13 +43,15 @@ impl Default for CommitterConfig {
             min_window_secs: 1.0,
             max_window_secs: 6.0,
             keep_secs: 2.0,
-            context_secs: 1.0,
+            context_secs: 1.5,
         }
     }
 }
 
 pub struct Committer<'a> {
     asr: &'a dyn Transcriber,
+    /// Decides whether an empty decode is silence or a model dropout.
+    vad: Option<&'a SpeechTrimmer>,
     hotwords: Vec<String>,
     cfg: CommitterConfig,
     audio: Vec<f32>,
@@ -54,6 +61,8 @@ pub struct Committer<'a> {
     /// from re-decoded context; audio skipped as silence may still hold a word onset.
     committed_end: usize,
     last_decode_at: usize,
+    /// Consecutive decodes that returned no words.
+    empty_streak: u32,
     committed: Vec<Word>,
     pending: Vec<Word>,
     pub stats: SessionStats,
@@ -63,15 +72,38 @@ impl<'a> Committer<'a> {
     pub fn new(asr: &'a dyn Transcriber, hotwords: Vec<String>, cfg: CommitterConfig) -> Self {
         Self {
             asr,
+            vad: None,
             hotwords,
             cfg,
             audio: Vec::with_capacity(16_000 * 60),
             window_start: 0,
             committed_end: 0,
             last_decode_at: 0,
+            empty_streak: 0,
             committed: Vec::new(),
             pending: Vec::new(),
             stats: SessionStats::default(),
+        }
+    }
+
+    /// Uses voice activity detection to tell silence from a decode that dropped speech.
+    pub fn with_vad(mut self, vad: &'a SpeechTrimmer) -> Self {
+        self.vad = Some(vad);
+        self
+    }
+
+    /// Whether the uncommitted audio is silence, after `empty_streak` empty decodes.
+    fn is_silence(&self) -> bool {
+        match self.vad {
+            // Trust VAD, but give up after a few empty decodes over "speech" (noise, coughs)
+            // so the window can't grow without bound.
+            Some(vad) => {
+                self.empty_streak >= MAX_EMPTY_OVER_SPEECH
+                    || vad
+                        .speech_bounds(&self.audio[self.window_start..])
+                        .is_none()
+            }
+            None => self.empty_streak >= 2,
         }
     }
 
@@ -80,30 +112,49 @@ impl<'a> Committer<'a> {
         let hyp = self.decode_window()?;
 
         if hyp.is_empty() {
-            // Silence (or noise the model ignores): nothing to wait for, so don't keep
-            // re-decoding it. Leave a little audio in case a word is just starting.
-            let keep = (SILENCE_KEEP_SECS * SAMPLE_RATE) as usize;
-            self.window_start = self.window_start.max(self.audio.len().saturating_sub(keep));
-            self.pending.clear();
+            // An empty decode can be a dropout mid-speech, so keep what we were waiting to
+            // confirm. Only real silence stops us re-decoding it; leave a little audio in
+            // case a word is just starting.
+            self.empty_streak += 1;
+            if self.is_silence() {
+                let keep = (SILENCE_KEEP_SECS * SAMPLE_RATE) as usize;
+                self.window_start = self.window_start.max(self.audio.len().saturating_sub(keep));
+                self.pending.clear();
+            }
             return Ok(Vec::new());
         }
+        self.empty_streak = 0;
 
-        let mut agreed = common_prefix(&self.pending, &hyp);
+        let mut agreed = agree(&self.pending, &hyp);
+        log::debug!(
+            "t={:.1}s commit={:?} | prev: {} | now: {}",
+            self.audio_secs(),
+            join_words(&agreed.commit),
+            join_words(&self.pending),
+            join_words(&hyp)
+        );
         let window_secs = (self.audio.len() - self.window_start) as f32 / SAMPLE_RATE;
-        if agreed == 0 && window_secs > self.cfg.max_window_secs {
+        if agreed.commit.is_empty() && window_secs > self.cfg.max_window_secs {
             // Long unstable stretch (noise, mumbling): don't let the tail grow without bound.
             let horizon = self.audio_secs() - self.cfg.keep_secs;
-            agreed = hyp.iter().take_while(|w| w.end <= horizon).count();
+            let n = hyp.iter().take_while(|w| w.end <= horizon).count();
+            agreed = Agreement {
+                commit: hyp[..n].to_vec(),
+                now_end: n,
+            };
         }
-        if agreed == 0 {
+        if agreed.commit.is_empty() {
             self.pending = hyp;
             return Ok(Vec::new());
         }
 
-        let newly: Vec<Word> = hyp[..agreed].to_vec();
+        let Agreement {
+            commit: newly,
+            now_end,
+        } = agreed;
         let last_end = newly.last().map(|w| w.end).unwrap_or(0.0);
         // Cut halfway into the gap before the next word so neither word loses audio.
-        let cut = match hyp.get(agreed) {
+        let cut = match hyp.get(now_end) {
             Some(next) => (last_end + next.start) / 2.0,
             None => last_end,
         };
@@ -111,16 +162,33 @@ impl<'a> Committer<'a> {
             ((cut.max(0.0) * SAMPLE_RATE) as usize).clamp(self.committed_end, self.audio.len());
         self.committed_end = cut;
         self.window_start = self.window_start.max(cut);
-        self.pending = hyp[agreed..].to_vec();
+        self.pending = hyp[now_end..].to_vec();
         self.committed.extend(newly.iter().cloned());
         Ok(newly)
+    }
+
+    /// Where to start feeding audio: about `context_secs` before the window, snapped
+    /// back to the start of a committed word. Starting a decode mid-word can make
+    /// Parakeet drop the next several seconds of speech entirely.
+    fn context_start(&self) -> usize {
+        let target = self
+            .window_start
+            .saturating_sub((self.cfg.context_secs * SAMPLE_RATE) as usize);
+        let target_secs = target as f32 / SAMPLE_RATE;
+        let word_start = self
+            .committed
+            .iter()
+            .rev()
+            .take_while(|w| w.end > target_secs)
+            .last()
+            .map(|w| ((w.start - WORD_LEAD_SECS).max(0.0) * SAMPLE_RATE) as usize);
+        word_start.map_or(target, |s| s.min(target))
     }
 
     /// Decodes the uncommitted window (plus left context) and returns only the
     /// new words, with absolute timestamps.
     fn decode_window(&mut self) -> Result<Vec<Word>> {
-        let ctx = (self.cfg.context_secs * SAMPLE_RATE) as usize;
-        let from = self.window_start.saturating_sub(ctx);
+        let from = self.context_start();
         let offset = from as f32 / SAMPLE_RATE;
         let boundary = self.committed_end as f32 / SAMPLE_RATE;
 
@@ -129,6 +197,16 @@ impl<'a> Committer<'a> {
         self.stats.decodes += 1;
         self.stats.decode_time += t.elapsed();
 
+        log::trace!(
+            "raw from {:.2}s, boundary {:.2}s: {}",
+            offset,
+            boundary,
+            hyp.words
+                .iter()
+                .map(|w| format!("{}@{:.2}-{:.2}", w.text, w.start + offset, w.end + offset))
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
         let mut words: Vec<Word> = hyp
             .words
             .into_iter()
@@ -184,7 +262,8 @@ impl Session for Committer<'_> {
         let t = Instant::now();
         let hyp = self.decode_window()?;
         self.stats.tail_time = t.elapsed();
-        self.committed.extend(hyp);
+        let pending = std::mem::take(&mut self.pending);
+        self.committed.extend(restore_dropped_lead(&pending, hyp));
         let stats = self.stats.clone();
         Ok((
             Hypothesis {
@@ -202,11 +281,85 @@ fn norm(s: &str) -> String {
         .collect()
 }
 
-fn common_prefix(a: &[Word], b: &[Word]) -> usize {
-    a.iter()
-        .zip(b)
-        .take_while(|(x, y)| norm(&x.text) == norm(&y.text))
-        .count()
+/// Hesitations, plus the words the model confuses them with ("uh" ↔ "a", "um" ↔ "I'm").
+/// They flip between decodes, so agreement ignores them; the cleanup LLM deals with them.
+const UNSTABLE: &[&str] = &[
+    "uh", "um", "ah", "er", "erm", "hm", "hmm", "mm", "mhm", "a", "i", "im",
+];
+/// How many leading words one decode may have that the other lacks (dropout at the window edge).
+const MAX_LEAD_SKIP: usize = 3;
+
+struct Agreement {
+    /// Words to commit, taken from whichever decode had the fuller version.
+    commit: Vec<Word>,
+    /// Index in the newest decode just past the agreed span.
+    now_end: usize,
+}
+
+/// The final decode has nothing after it to agree with. If it starts partway into
+/// what the previous decode heard (window-edge dropout), put the missing words back.
+fn restore_dropped_lead(prev: &[Word], now: Vec<Word>) -> Vec<Word> {
+    let a = agree(prev, &now);
+    match a.commit.first() {
+        // `agree` took the leading words from `prev` only when `now` was missing them.
+        Some(first) if !now.first().is_some_and(|n| n == first) && a.commit.len() > a.now_end => {
+            let missing = a.commit.len() - a.now_end;
+            prev[..missing].iter().cloned().chain(now).collect()
+        }
+        _ => now,
+    }
+}
+
+/// LocalAgreement between the previous and the newest decode of the window.
+///
+/// Compares content words only (see [`UNSTABLE`]). Either decode may start with up to
+/// [`MAX_LEAD_SKIP`] words the other dropped, as long as at least two words then agree;
+/// the dropped words are kept, since dropout loses real words but rarely invents them.
+fn agree(prev: &[Word], now: &[Word]) -> Agreement {
+    let none = Agreement {
+        commit: Vec::new(),
+        now_end: 0,
+    };
+    let keys = |ws: &[Word]| -> Vec<(usize, String)> {
+        ws.iter()
+            .enumerate()
+            .filter_map(|(i, w)| {
+                let k = norm(&w.text);
+                (!k.is_empty() && !UNSTABLE.contains(&k.as_str())).then_some((i, k))
+            })
+            .collect()
+    };
+    let (kp, kn) = (keys(prev), keys(now));
+
+    // (skip in prev, skip in now, run length)
+    let mut best: Option<(usize, usize, usize)> = None;
+    for sp in 0..=MAX_LEAD_SKIP.min(kp.len()) {
+        for sn in 0..=MAX_LEAD_SKIP.min(kn.len()) {
+            if sp > 0 && sn > 0 {
+                continue;
+            }
+            let run = kp[sp..]
+                .iter()
+                .zip(&kn[sn..])
+                .take_while(|(a, b)| a.1 == b.1)
+                .count();
+            let needed = if sp + sn == 0 { 1 } else { 2 };
+            if run >= needed && best.is_none_or(|b| run > b.2) {
+                best = Some((sp, sn, run));
+            }
+        }
+    }
+    let Some((sp, sn, run)) = best else {
+        return none;
+    };
+
+    let now_end = kn[sn + run - 1].0 + 1;
+    let commit = if sp > 0 {
+        prev[..=kp[sp + run - 1].0].to_vec()
+    } else {
+        now[..now_end].to_vec()
+    };
+    Agreement { commit, now_end }
 }
 
 #[cfg(test)]
@@ -312,5 +465,104 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["My", "name"]
         );
+    }
+
+    fn words(text: &str) -> Vec<Word> {
+        text.split(' ')
+            .enumerate()
+            .map(|(i, t)| Word {
+                text: t.into(),
+                start: i as f32,
+                end: i as f32 + 0.5,
+            })
+            .collect()
+    }
+
+    fn texts(a: &Agreement) -> String {
+        join_words(&a.commit)
+    }
+
+    #[test]
+    fn agreement_ignores_filler_flips() {
+        let a = agree(
+            &words("the contractor and uh interacting"),
+            &words("the contractor and a interacting with"),
+        );
+        assert_eq!(texts(&a), "the contractor and a interacting");
+        assert_eq!(a.now_end, 5);
+    }
+
+    #[test]
+    fn agreement_keeps_words_the_newer_decode_dropped() {
+        let prev = words("anyone gets paid, which is honestly the biggest pain for I ever");
+        let now = words("Which is honestly the biggest pain for every electrical");
+        let a = agree(&prev, &now);
+        assert_eq!(
+            texts(&a),
+            "anyone gets paid, which is honestly the biggest pain for"
+        );
+        assert_eq!(now[a.now_end].text, "every");
+    }
+
+    #[test]
+    fn agreement_keeps_words_the_older_decode_dropped() {
+        let a = agree(
+            &words("Which is honestly the"),
+            &words("anyone gets paid, which is honestly the biggest"),
+        );
+        assert_eq!(texts(&a), "anyone gets paid, which is honestly the");
+    }
+
+    #[test]
+    fn a_single_word_after_a_skip_is_not_enough() {
+        assert!(
+            agree(
+                &words("which honestly"),
+                &words("anyone gets paid, which is")
+            )
+            .commit
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn final_decode_gets_dropped_lead_words_back() {
+        let prev = words("every electrical subconscious.");
+        let now = words("electrical subcontractor we have talked to");
+        // Only one content word agrees after the skip, so nothing is restored.
+        assert_eq!(
+            join_words(&restore_dropped_lead(&prev, now.clone())),
+            join_words(&now)
+        );
+
+        let prev = words("anyone gets paid, which is honestly");
+        let now = words("which is honestly the biggest");
+        assert_eq!(
+            join_words(&restore_dropped_lead(&prev, now)),
+            "anyone gets paid, which is honestly the biggest"
+        );
+    }
+
+    #[test]
+    fn one_empty_decode_is_not_silence() {
+        let asr = Scripted(Mutex::new(vec![
+            vec![("anyone", 0.1, 0.4), ("gets", 0.5, 0.7)],
+            vec![],
+            vec![("anyone", 0.1, 0.4), ("gets", 0.5, 0.7), ("paid", 0.8, 1.2)],
+        ]));
+        let cfg = CommitterConfig {
+            context_secs: 0.0,
+            ..Default::default()
+        };
+        let mut c = Committer::new(&asr, vec![], cfg);
+        let second = vec![0.0; 16_000];
+        c.push(&second).unwrap();
+        c.push(&second).unwrap();
+        assert_eq!(
+            c.window_start, 0,
+            "a single empty decode must not slide the window"
+        );
+        let committed = c.push(&second).unwrap();
+        assert_eq!(join_words(&committed), "anyone gets");
     }
 }
