@@ -68,3 +68,17 @@ Fixes: agreement ignores fillers and tolerates ≤3 dropped lead words (keeping 
 `listen --save recordings/x.wav` now records real sessions so they can be replayed with `stream` (recordings/ is gitignored).
 
 Live check (jatin-01, 52 s, MacBook Air): transcript complete with first words kept, but Enter → text 1,442 ms = final decode 563 ms + ~880 ms waiting for the in-flight decode. Replaying the same recording: average decode ≈ 370 ms, final ≈ 500 ms. **The remaining latency is decode speed on CPU**, so the next lever is GPU/ANE inference.
+
+## 2026-11-03 — all three tiers, ASR only (`muskflow bench`, real-time replay)
+
+Full report with transcripts: [bench/2026-11-03-asr-tiers.md](bench/2026-11-03-asr-tiers.md). MacBook Air M5, CPU only, 8 clips / 100 s, US + UK + Indian English voices.
+
+| Tier | WER | Gap to best | Key-up → text p50 / max | CPU while speaking | Size |
+|---|---|---|---|---|---|
+| Lite (Parakeet 110M) | 6.9% | +5.4 pts | 84 / 171 ms | 10% | 136 MB |
+| Standard (Parakeet 0.6B) | 4.3% | +2.9 pts | 293 / 413 ms | 37% | 670 MB |
+| Max (Whisper turbo, by phrase) | **1.4%** | — | 3,556 / 5,243 ms | 80% | 1,036 MB |
+
+- Max is the most accurate, but on a CPU-only Air it's too slow to use. It needs the GPU/ANE.
+- Lite's errors are names and rare words ("Rediscon", "postger's", "Joden", "pria"), plus fillers misheard as words. That's exactly what hotwords, the context-aware cleanup LLM and distilling Max into Lite are meant to fix.
+- Gap to close: **5.4 points of WER between Lite and Max**.
