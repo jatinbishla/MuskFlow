@@ -45,4 +45,4 @@ Useful flags: `--asr <model dir>`, `--threads N`, `--step` / `--context` (stream
 
 ## License
 
-Apache-2.0. Models keep their own licences (Parakeet: CC-BY-4.0).
+[Apache-2.0](LICENSE). Models keep their own licences (Parakeet: CC-BY-4.0).

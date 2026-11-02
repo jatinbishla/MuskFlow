@@ -6,7 +6,7 @@ members = ["crates/*", "apps/cli"]
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
-repository = "https://github.com/musk-flow/musk-flow"
+repository = "https://github.com/jatinbishla/MuskFlow"
 
 [workspace.dependencies]
 mf-audio = { path = "crates/mf-audio" }
