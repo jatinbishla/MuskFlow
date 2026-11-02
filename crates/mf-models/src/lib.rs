@@ -80,11 +80,10 @@ impl Tier {
         self.artifacts().iter().all(|a| a.is_installed(models))
     }
 
-    /// Suggested tier for a machine with this much RAM.
+    /// Suggested tier for a machine with this much RAM. Never Max: it needs a fast
+    /// GPU/ANE to feel instant, so users opt into it explicitly.
     pub fn recommended(ram_gb: f64) -> Tier {
-        if ram_gb >= 16.0 {
-            Tier::Standard // Max needs a GPU/ANE to be fast; opt in explicitly
-        } else if ram_gb >= 8.0 {
+        if ram_gb >= 8.0 {
             Tier::Standard
         } else {
             Tier::Lite
