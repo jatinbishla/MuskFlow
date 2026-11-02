@@ -1,0 +1,28 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/cli"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/freeflow/freeflow"
+
+[workspace.dependencies]
+ff-audio = { path = "crates/ff-audio" }
+ff-asr = { path = "crates/ff-asr" }
+anyhow = "1.0"
+thiserror = "2"
+cpal = "0.18"
+rtrb = "0.4"
+crossbeam-channel = "0.5"
+hound = "3.5"
+clap = { version = "4.6", features = ["derive", "env"] }
+sherpa-onnx = "2.0.1"
+log = "0.4"
+env_logger = "0.11"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

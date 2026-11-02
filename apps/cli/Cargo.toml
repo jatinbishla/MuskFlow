@@ -1,0 +1,19 @@
+[package]
+name = "freeflow-cli"
+description = "Headless FreeFlow: transcribe, stream, listen, bench"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "freeflow"
+path = "src/main.rs"
+
+[dependencies]
+ff-audio.workspace = true
+ff-asr.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+crossbeam-channel.workspace = true
+log.workspace = true
+env_logger.workspace = true
