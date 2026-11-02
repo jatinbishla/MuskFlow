@@ -25,6 +25,7 @@ const PUMP_INTERVAL: Duration = Duration::from_millis(10);
 #[derive(Debug, Clone)]
 pub struct MicInfo {
     pub device: String,
+    pub name: String,
     pub sample_rate: u32,
     pub channels: u16,
 }
@@ -36,17 +37,82 @@ pub struct MicCapture {
     stream: Option<cpal::Stream>,
     running: Arc<AtomicBool>,
     pump: Option<JoinHandle<()>>,
-    level: Arc<AtomicU32>,
+    meter: Arc<Meter>,
     pub info: MicInfo,
 }
 
-impl MicCapture {
-    /// Opens the default input device and starts streaming 16 kHz mono chunks to `tx`.
-    pub fn start(tx: Sender<Vec<f32>>) -> Result<Self> {
-        let host = cpal::default_host();
-        let device = host.default_input_device().ok_or_else(|| {
+/// Lock-free level meter written by the audio callback.
+#[derive(Default)]
+struct Meter {
+    /// RMS of the latest callback buffer, as f32 bits.
+    level: AtomicU32,
+    /// Highest absolute sample since start, as f32 bits. Non-negative floats order
+    /// the same as their bit patterns, so `fetch_max` on the bits is a float max.
+    peak: AtomicU32,
+}
+
+/// An input device the user can pick.
+#[derive(Debug, Clone)]
+pub struct MicDevice {
+    pub id: String,
+    pub name: String,
+    pub is_default: bool,
+}
+
+/// Lists input devices on the default audio host.
+pub fn list_inputs() -> Result<Vec<MicDevice>> {
+    let host = cpal::default_host();
+    let default_id = host
+        .default_input_device()
+        .and_then(|d| d.id().ok())
+        .map(|id| id.to_string());
+    let mut out = Vec::new();
+    for device in host.input_devices()? {
+        let Ok(id) = device.id().map(|id| id.to_string()) else {
+            continue;
+        };
+        let name = device
+            .description()
+            .map(|d| d.to_string())
+            .unwrap_or_else(|_| id.clone());
+        out.push(MicDevice {
+            is_default: Some(&id) == default_id.as_ref(),
+            id,
+            name,
+        });
+    }
+    Ok(out)
+}
+
+/// The default input, or the first whose id or name contains `query` (case-insensitive).
+fn pick_device(query: Option<&str>) -> Result<cpal::Device> {
+    let host = cpal::default_host();
+    let Some(query) = query else {
+        return host.default_input_device().ok_or_else(|| {
             anyhow!("no input device found (is a microphone connected and allowed?)")
-        })?;
+        });
+    };
+    let q = query.to_lowercase();
+    for device in host.input_devices()? {
+        let id = device.id().map(|id| id.to_string()).unwrap_or_default();
+        let name = device
+            .description()
+            .map(|d| d.to_string())
+            .unwrap_or_default();
+        if id.to_lowercase().contains(&q) || name.to_lowercase().contains(&q) {
+            return Ok(device);
+        }
+    }
+    Err(anyhow!(
+        "no input device matches \"{query}\" (see `muskflow devices`)"
+    ))
+}
+
+impl MicCapture {
+    /// Opens an input device (the system default when `device` is `None`, otherwise
+    /// the first whose id or name contains it) and streams 16 kHz mono chunks to `tx`.
+    pub fn start(device: Option<&str>, tx: Sender<Vec<f32>>) -> Result<Self> {
+        let device = pick_device(device)?;
         let config = device
             .default_input_config()
             .context("could not read the input device's default config")?;
@@ -56,12 +122,16 @@ impl MicCapture {
                 .id()
                 .map(|id| id.to_string())
                 .unwrap_or_else(|_| "unknown".into()),
+            name: device
+                .description()
+                .map(|d| d.to_string())
+                .unwrap_or_default(),
             sample_rate: config.sample_rate(),
             channels: config.channels(),
         };
 
         let (producer, consumer) = rtrb::RingBuffer::<f32>::new(RING_CAPACITY);
-        let level = Arc::new(AtomicU32::new(0));
+        let meter = Arc::new(Meter::default());
         let channels = info.channels as usize;
 
         let err_fn = |err| log::warn!("audio stream error: {err}");
@@ -72,7 +142,7 @@ impl MicCapture {
                 &stream_config,
                 channels,
                 producer,
-                level.clone(),
+                meter.clone(),
                 err_fn,
             ),
             SampleFormat::I16 => build::<i16>(
@@ -80,7 +150,7 @@ impl MicCapture {
                 &stream_config,
                 channels,
                 producer,
-                level.clone(),
+                meter.clone(),
                 err_fn,
             ),
             SampleFormat::I32 => build::<i32>(
@@ -88,7 +158,7 @@ impl MicCapture {
                 &stream_config,
                 channels,
                 producer,
-                level.clone(),
+                meter.clone(),
                 err_fn,
             ),
             SampleFormat::U16 => build::<u16>(
@@ -96,7 +166,7 @@ impl MicCapture {
                 &stream_config,
                 channels,
                 producer,
-                level.clone(),
+                meter.clone(),
                 err_fn,
             ),
             other => return Err(anyhow!("unsupported sample format {other}")),
@@ -110,14 +180,19 @@ impl MicCapture {
             stream: Some(stream),
             running,
             pump: Some(pump),
-            level,
+            meter,
             info,
         })
     }
 
     /// Current input level (RMS of the latest callback buffer), 0.0–1.0, for the waveform UI.
     pub fn level(&self) -> f32 {
-        f32::from_bits(self.level.load(Ordering::Relaxed))
+        f32::from_bits(self.meter.level.load(Ordering::Relaxed))
+    }
+
+    /// Loudest sample since capture started, 0.0–1.0. Near zero means the device sent silence.
+    pub fn peak(&self) -> f32 {
+        f32::from_bits(self.meter.peak.load(Ordering::Relaxed))
     }
 
     /// Stops capture. Audio captured before this call is still delivered, then the channel closes.
@@ -146,7 +221,7 @@ fn build<T>(
     config: &cpal::StreamConfig,
     channels: usize,
     mut producer: rtrb::Producer<f32>,
-    level: Arc<AtomicU32>,
+    meter: Arc<Meter>,
     err_fn: impl FnMut(cpal::Error) + Send + 'static,
 ) -> Result<cpal::Stream>
 where
@@ -157,17 +232,22 @@ where
         *config,
         move |data: &[T], _: &cpal::InputCallbackInfo| {
             let mut sum_sq = 0.0f32;
+            let mut peak = 0.0f32;
             let mut frames = 0usize;
             for frame in data.chunks_exact(channels) {
                 let mono =
                     frame.iter().map(|s| f32::from_sample(*s)).sum::<f32>() / channels as f32;
                 sum_sq += mono * mono;
+                peak = peak.max(mono.abs());
                 frames += 1;
                 // If the ring is full the consumer has stalled; dropping samples beats blocking here.
                 let _ = producer.push(mono);
             }
             if frames > 0 {
-                level.store((sum_sq / frames as f32).sqrt().to_bits(), Ordering::Relaxed);
+                meter
+                    .level
+                    .store((sum_sq / frames as f32).sqrt().to_bits(), Ordering::Relaxed);
+                meter.peak.fetch_max(peak.to_bits(), Ordering::Relaxed);
             }
         },
         err_fn,

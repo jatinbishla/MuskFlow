@@ -5,7 +5,7 @@ mod capture;
 mod vad;
 mod wav;
 
-pub use capture::{MicCapture, MicInfo};
+pub use capture::{MicCapture, MicDevice, MicInfo, list_inputs};
 pub use vad::{SpeechTrimmer, VadConfig};
 pub use wav::load_wav_16k;
 

@@ -48,7 +48,11 @@ pub struct Committer<'a> {
     hotwords: Vec<String>,
     cfg: CommitterConfig,
     audio: Vec<f32>,
+    /// Start of the audio still being decoded. Silence moves it forward too.
     window_start: usize,
+    /// End of the audio whose words are committed. Only words before this are discarded
+    /// from re-decoded context; audio skipped as silence may still hold a word onset.
+    committed_end: usize,
     last_decode_at: usize,
     committed: Vec<Word>,
     pending: Vec<Word>,
@@ -63,6 +67,7 @@ impl<'a> Committer<'a> {
             cfg,
             audio: Vec::with_capacity(16_000 * 60),
             window_start: 0,
+            committed_end: 0,
             last_decode_at: 0,
             committed: Vec::new(),
             pending: Vec::new(),
@@ -102,8 +107,10 @@ impl<'a> Committer<'a> {
             Some(next) => (last_end + next.start) / 2.0,
             None => last_end,
         };
-        self.window_start =
-            ((cut.max(0.0) * SAMPLE_RATE) as usize).clamp(self.window_start, self.audio.len());
+        let cut =
+            ((cut.max(0.0) * SAMPLE_RATE) as usize).clamp(self.committed_end, self.audio.len());
+        self.committed_end = cut;
+        self.window_start = self.window_start.max(cut);
         self.pending = hyp[agreed..].to_vec();
         self.committed.extend(newly.iter().cloned());
         Ok(newly)
@@ -115,7 +122,7 @@ impl<'a> Committer<'a> {
         let ctx = (self.cfg.context_secs * SAMPLE_RATE) as usize;
         let from = self.window_start.saturating_sub(ctx);
         let offset = from as f32 / SAMPLE_RATE;
-        let boundary = self.window_start as f32 / SAMPLE_RATE;
+        let boundary = self.committed_end as f32 / SAMPLE_RATE;
 
         let t = Instant::now();
         let hyp = self.asr.transcribe(&self.audio[from..], &self.hotwords)?;
@@ -281,5 +288,29 @@ mod tests {
         c.push(&second).unwrap();
         // Two silent decodes: only the last 0.5 s stays in the window.
         assert_eq!(c.audio.len() - c.window_start, 8_000);
+    }
+
+    #[test]
+    fn word_onset_in_skipped_silence_is_not_lost() {
+        // Decode 1 (1 s of audio) hears only the start of a word: no words, window slides to 0.5 s.
+        // Decode 2 (2 s, re-fed from 0 s as context) hears "My" at 0.2 s, before the slide
+        // point. It was never committed, so it must be kept.
+        let asr = Scripted(Mutex::new(vec![
+            vec![],
+            vec![("My", 0.2, 0.45), ("name", 0.5, 0.9)],
+            vec![("My", 0.2, 0.45), ("name", 0.5, 0.9), ("is", 1.5, 1.7)],
+        ]));
+        let mut c = Box::new(Committer::new(&asr, vec![], CommitterConfig::default()));
+        let second = vec![0.0; 16_000];
+        c.push(&second).unwrap();
+        c.push(&second).unwrap();
+        let committed = c.push(&second).unwrap();
+        assert_eq!(
+            committed
+                .iter()
+                .map(|w| w.text.as_str())
+                .collect::<Vec<_>>(),
+            ["My", "name"]
+        );
     }
 }

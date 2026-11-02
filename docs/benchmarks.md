@@ -38,3 +38,12 @@ One-shot (`muskflow transcribe`): Parakeet 0.6B v3 decodes 17 s in ~1.6 s (≈10
 Real dictation (v2) kept every self-correction ("in the European no no no in the US market"); misses were the brand name ("subflow" for SubFlo) and "building app" (likely "billing app"). Both are dictionary/context jobs.
 
 v3 dictation: "billing" was heard as "building" every time, even when the speaker corrected it out loud ("billing software, not building"). That's a consistent Indian-English vowel confusion, so it's the first concrete candidate for the ASR fine-tuning policy (ARCHITECTURE §12.1). "SubFlo" came out as "subflow / sub flow / Subflow", which needs the dictionary.
+
+## 2026-11-03 — live mic, after first-word fix
+
+| Run | Speech | Final decode | Enter → text | Notes |
+|---|---|---|---|---|
+| v4 (`--mic MacBook`, before fix) | 64 s | 0.62 s tail in 178 ms | 682 ms | first words lost ("is Jatan Bushla") |
+| v5 (first-word fix) | 52 s | **4.11 s tail in 776 ms** | 1,483 ms | first words kept ✓; last ~4 s never stabilised (continuous fast speech), and decoding ran at ~5× real time (Air thermals?) |
+
+Open issue: Enter → text depends on how much text is still unstable at key-up and on the in-flight decode. Ideas: ignore fillers when checking agreement; cancel or parallelise the in-flight decode on key-up; ANE/GPU decoding.

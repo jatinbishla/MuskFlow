@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use mf_asr::{CommitterConfig, Engine, ParakeetConfig, ParakeetTranscriber, Transcriber, Word};
-use mf_audio::{MicCapture, SpeechTrimmer, VadConfig, load_wav_16k, samples_to_secs};
+use mf_audio::{MicCapture, SpeechTrimmer, VadConfig, list_inputs, load_wav_16k, samples_to_secs};
 
 #[derive(Parser)]
 #[command(
@@ -69,7 +69,13 @@ enum Cmd {
         fast: bool,
     },
     /// Dictate from the microphone; press Enter to stop.
-    Listen,
+    Listen {
+        /// Input device: part of its name or id (see `muskflow devices`). Default: system input.
+        #[arg(long)]
+        mic: Option<String>,
+    },
+    /// List microphones.
+    Devices,
 }
 
 fn main() -> Result<()> {
@@ -78,8 +84,18 @@ fn main() -> Result<()> {
     match &cli.cmd {
         Cmd::Transcribe { wav, no_vad } => transcribe(&cli.common, wav, *no_vad),
         Cmd::Stream { wav, fast } => stream(&cli.common, wav, *fast),
-        Cmd::Listen => listen(&cli.common),
+        Cmd::Listen { mic } => listen(&cli.common, mic.as_deref()),
+        Cmd::Devices => devices(),
     }
+}
+
+fn devices() -> Result<()> {
+    for d in list_inputs()? {
+        let mark = if d.is_default { "*" } else { " " };
+        println!("{mark} {}  ({})", d.name, d.id);
+    }
+    eprintln!("· * = system default. Pick one with: muskflow listen --mic \"<part of name>\"");
+    Ok(())
 }
 
 fn threads(c: &Common) -> i32 {
@@ -193,15 +209,15 @@ fn stream(c: &Common, wav: &Path, fast: bool) -> Result<()> {
     Ok(())
 }
 
-fn listen(c: &Common) -> Result<()> {
+fn listen(c: &Common, device: Option<&str>) -> Result<()> {
     let engine = load_engine(c)?;
     let vad = load_vad(c)?;
 
     let (tx, rx) = crossbeam_channel::unbounded::<Vec<f32>>();
-    let mic = MicCapture::start(tx).context("could not open the microphone")?;
+    let mic = MicCapture::start(device, tx).context("could not open the microphone")?;
     eprintln!(
-        "· mic {} @ {} Hz × {} ch — speak, then press Enter",
-        mic.info.device, mic.info.sample_rate, mic.info.channels
+        "· mic \"{}\" ({}) @ {} Hz × {} ch — speak, then press Enter",
+        mic.info.name, mic.info.device, mic.info.sample_rate, mic.info.channels
     );
 
     let stopping = AtomicBool::new(false);
@@ -234,11 +250,19 @@ fn listen(c: &Common) -> Result<()> {
         std::io::stdin().lock().read_line(&mut line)?;
         let stop = Instant::now();
         stopping.store(true, Ordering::Release);
+        let peak = mic.peak();
         mic.stop();
         let (hyp, stats, finish, all) = worker.join().expect("ASR worker panicked")?;
 
+        let peak_db = 20.0 * peak.max(1e-9).log10();
+        if peak < 1e-3 {
+            eprintln!(
+                "· the mic sent silence (peak {peak_db:.0} dBFS). Check it isn't muted, or pick another with --mic (see `muskflow devices`).\n  Bluetooth headsets often deliver nothing until they switch to headset mode."
+            );
+            return Ok(());
+        }
         if vad.speech_bounds(&all).is_none() {
-            eprintln!("· no speech detected");
+            eprintln!("· no speech detected (mic peak {peak_db:.0} dBFS)");
             return Ok(());
         }
         println!("\n{}", hyp.text());
