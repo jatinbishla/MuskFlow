@@ -119,6 +119,11 @@ impl StreamingSession<'_> {
 }
 
 impl Session for StreamingSession<'_> {
+    fn append(&mut self, pcm: &[f32]) {
+        self.samples += pcm.len();
+        self.stream.accept_waveform(SAMPLE_RATE, pcm);
+    }
+
     fn push(&mut self, pcm: &[f32]) -> Result<Vec<Word>> {
         self.samples += pcm.len();
         self.stream.accept_waveform(SAMPLE_RATE, pcm);

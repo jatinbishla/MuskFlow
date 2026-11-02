@@ -26,3 +26,15 @@ One-shot (`freeflow transcribe`): Parakeet 0.6B v3 decodes 17 s in ~1.6 s (≈10
 - 110M is the Lite-tier candidate: 2× faster, but needs the LLM + screen context to fix names.
 - Hotwords (`--hotwords`, beam search) had **no effect** and doubled the decode time. sherpa-onnx likely needs BPE-tokenised hotwords (`modeling_unit=bpe` + `bpe_vocab`). TODO.
 - Biggest remaining win: run Parakeet on the Apple Neural Engine / GPU (CoreML fp16 build) instead of int8 on CPU. That would cut CPU use while speaking from 30 % to a few % (battery).
+
+## 2026-11-03 — live mic (`freeflow listen`, MacBook Air M5, built-in mic)
+
+| Run | Speech | Enter → text | Notes |
+|---|---|---|---|
+| v1 (4 threads, window grew through pauses) | 20 s | 7,645 ms | decoder fell behind real time during silence |
+| v2 (silence slides window, coalesced backlog, auto threads) | 46 s | 1,051 ms | tail decode only 312 ms; the rest was waiting for an in-flight decode + one catch-up decode |
+| v3 (no catch-up decode after Enter) | 59 s | **515 ms** | tail 0.81 s decoded in 270 ms; remainder is waiting on the in-flight decode |
+
+Real dictation (v2) kept every self-correction ("in the European no no no in the US market"); misses were the brand name ("subflow" for SubFlo) and "building app" (likely "billing app"). Both are dictionary/context jobs.
+
+v3 dictation: "billing" was heard as "building" every time, even when the speaker corrected it out loud ("billing software, not building"). That's a consistent Indian-English vowel confusion, so it's the first concrete candidate for the ASR fine-tuning policy (ARCHITECTURE §12.1). "SubFlo" came out as "subflow / sub flow / Subflow", which needs the dictionary.

@@ -13,6 +13,8 @@ use anyhow::Result;
 use crate::{Hypothesis, Session, SessionStats, Transcriber, Word, join_words};
 
 const SAMPLE_RATE: f32 = 16_000.0;
+/// Audio kept in the window when a decode finds no words.
+const SILENCE_KEEP_SECS: f32 = 0.5;
 
 #[derive(Debug, Clone)]
 pub struct CommitterConfig {
@@ -34,7 +36,7 @@ impl Default for CommitterConfig {
         Self {
             step_secs: 1.0,
             min_window_secs: 1.0,
-            max_window_secs: 15.0,
+            max_window_secs: 6.0,
             keep_secs: 2.0,
             context_secs: 1.0,
         }
@@ -71,6 +73,15 @@ impl<'a> Committer<'a> {
     fn step(&mut self) -> Result<Vec<Word>> {
         self.last_decode_at = self.audio.len();
         let hyp = self.decode_window()?;
+
+        if hyp.is_empty() {
+            // Silence (or noise the model ignores): nothing to wait for, so don't keep
+            // re-decoding it. Leave a little audio in case a word is just starting.
+            let keep = (SILENCE_KEEP_SECS * SAMPLE_RATE) as usize;
+            self.window_start = self.window_start.max(self.audio.len().saturating_sub(keep));
+            self.pending.clear();
+            return Ok(Vec::new());
+        }
 
         let mut agreed = common_prefix(&self.pending, &hyp);
         let window_secs = (self.audio.len() - self.window_start) as f32 / SAMPLE_RATE;
@@ -134,6 +145,10 @@ impl<'a> Committer<'a> {
 
 impl Session for Committer<'_> {
     /// Adds audio. Returns the words newly committed by this call (often none).
+    fn append(&mut self, pcm: &[f32]) {
+        self.audio.extend_from_slice(pcm);
+    }
+
     fn push(&mut self, pcm: &[f32]) -> Result<Vec<Word>> {
         self.audio.extend_from_slice(pcm);
         let since_last = self.audio.len() - self.last_decode_at;
@@ -251,5 +266,20 @@ mod tests {
         let (hyp, stats) = c.finish().unwrap();
         assert_eq!(hyp.text(), "hello, world how are you?");
         assert_eq!(stats.decodes, 4);
+    }
+
+    #[test]
+    fn silence_slides_the_window_instead_of_growing_it() {
+        let asr = Scripted(Mutex::new(vec![vec![], vec![]]));
+        let cfg = CommitterConfig {
+            context_secs: 0.0,
+            ..Default::default()
+        };
+        let mut c = Committer::new(&asr, vec![], cfg);
+        let second = vec![0.0; 16_000];
+        c.push(&second).unwrap();
+        c.push(&second).unwrap();
+        // Two silent decodes: only the last 0.5 s stays in the window.
+        assert_eq!(c.audio.len() - c.window_start, 8_000);
     }
 }

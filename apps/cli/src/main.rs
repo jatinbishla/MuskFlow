@@ -2,6 +2,7 @@
 
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -34,7 +35,8 @@ struct Common {
         global = true
     )]
     asr: String,
-    #[arg(long, default_value_t = 4, global = true)]
+    /// Inference threads; 0 = all cores, capped at 8.
+    #[arg(long, default_value_t = 0, global = true)]
     threads: i32,
     /// Inference provider: cpu or coreml.
     #[arg(long, default_value = "cpu", global = true)]
@@ -80,10 +82,17 @@ fn main() -> Result<()> {
     }
 }
 
+fn threads(c: &Common) -> i32 {
+    if c.threads > 0 {
+        return c.threads;
+    }
+    std::thread::available_parallelism().map_or(4, |n| n.get().min(8) as i32)
+}
+
 fn load_asr(c: &Common) -> Result<ParakeetTranscriber> {
     let t = Instant::now();
     let mut cfg = ParakeetConfig::new(c.models.join(&c.asr));
-    cfg.num_threads = c.threads;
+    cfg.num_threads = threads(c);
     cfg.provider = c.provider.clone();
     cfg.hotwords = !c.hotwords.is_empty();
     let asr = ParakeetTranscriber::load(&cfg)?;
@@ -100,7 +109,7 @@ fn load_engine(c: &Common) -> Result<Engine> {
     };
     let engine = Engine::load(
         &c.models.join(&c.asr),
-        c.threads,
+        threads(c),
         &c.provider,
         c.hotwords.clone(),
     )?
@@ -195,14 +204,26 @@ fn listen(c: &Common) -> Result<()> {
         mic.info.device, mic.info.sample_rate, mic.info.channels
     );
 
+    let stopping = AtomicBool::new(false);
     std::thread::scope(|s| -> Result<()> {
         let worker = s.spawn(|| -> Result<_> {
             let mut session = engine.session();
             let mut all = Vec::new();
             // The channel closes once the mic is stopped and the pump has flushed.
+            // Coalesce everything queued into one push, so a slow decode is followed by one
+            // catch-up decode instead of a backlog of them.
+            let mut batch = Vec::new();
             for chunk in rx.iter() {
-                all.extend_from_slice(&chunk);
-                print_committed(&session.push(&chunk)?);
+                batch.extend_from_slice(&chunk);
+                batch.extend(rx.try_iter().flatten());
+                all.extend_from_slice(&batch);
+                if stopping.load(Ordering::Acquire) {
+                    // Key is up: the final decode covers this, so don't spend a decode on it now.
+                    session.append(&batch);
+                } else {
+                    print_committed(&session.push(&batch)?);
+                }
+                batch.clear();
             }
             let key_up = Instant::now();
             let (hyp, stats) = session.finish()?;
@@ -212,6 +233,7 @@ fn listen(c: &Common) -> Result<()> {
         let mut line = String::new();
         std::io::stdin().lock().read_line(&mut line)?;
         let stop = Instant::now();
+        stopping.store(true, Ordering::Release);
         mic.stop();
         let (hyp, stats, finish, all) = worker.join().expect("ASR worker panicked")?;
 

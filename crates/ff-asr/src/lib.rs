@@ -63,6 +63,8 @@ pub trait Transcriber: Send + Sync {
 pub trait Session {
     /// Adds 16 kHz mono audio. Returns words that became final during this call.
     fn push(&mut self, pcm: &[f32]) -> Result<Vec<Word>>;
+    /// Adds audio without decoding. Used after key-up, when the next decode is `finish`.
+    fn append(&mut self, pcm: &[f32]);
     /// `(final, tentative)` text for live display.
     fn partial_text(&self) -> (String, String);
     fn audio_secs(&self) -> f32;
