@@ -4,3 +4,4 @@
 *.part
 .DS_Store
 /recordings
+/bench/clips

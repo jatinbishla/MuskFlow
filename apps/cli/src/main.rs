@@ -1,5 +1,7 @@
 //! `muskflow` — headless MuskFlow for development, benchmarking and scripting.
 
+mod bench;
+
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -7,7 +9,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
-use mf_asr::{CommitterConfig, Engine, ParakeetConfig, ParakeetTranscriber, Transcriber, Word};
+use mf_asr::{
+    CommitterConfig, Engine, ParakeetConfig, ParakeetTranscriber, SessionStats, Transcriber, Word,
+};
 use mf_audio::{
     MicCapture, SpeechTrimmer, VadConfig, list_inputs, load_wav_16k, samples_to_secs, save_wav_16k,
 };
@@ -26,10 +30,10 @@ struct Cli {
 }
 
 #[derive(Args)]
-struct Common {
+pub(crate) struct Common {
     /// Directory with downloaded models (see scripts/fetch-models.sh).
     #[arg(long, env = "MUSKFLOW_MODELS", default_value = "models", global = true)]
-    models: PathBuf,
+    pub(crate) models: PathBuf,
     /// ASR model directory name inside --models.
     #[arg(
         long,
@@ -81,6 +85,24 @@ enum Cmd {
     },
     /// List microphones.
     Devices,
+    /// Run every clip through every tier and compare accuracy, latency, CPU and size.
+    Bench {
+        /// Tiers to run (comma-separated).
+        #[arg(long, value_delimiter = ',', default_value = "lite,standard,max")]
+        tiers: Vec<String>,
+        /// Folder of <id>.wav + <id>.txt (reference) pairs; see scripts/make-bench-clips.sh.
+        #[arg(long, default_value = "bench/clips")]
+        clips: PathBuf,
+        /// Feed audio as fast as possible: accurate WER, but latency and CPU numbers are not realistic.
+        #[arg(long)]
+        fast: bool,
+        /// Print every hypothesis next to its reference.
+        #[arg(long)]
+        show: bool,
+        /// Also write the report (markdown) to this file.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -91,6 +113,13 @@ fn main() -> Result<()> {
         Cmd::Stream { wav, fast } => stream(&cli.common, wav, *fast),
         Cmd::Listen { mic, save } => listen(&cli.common, mic.as_deref(), save.as_deref()),
         Cmd::Devices => devices(),
+        Cmd::Bench {
+            tiers,
+            clips,
+            fast,
+            show,
+            out,
+        } => bench::run(&cli.common, tiers, clips, *fast, *show, out.as_deref()),
     }
 }
 
@@ -121,21 +150,16 @@ fn load_asr(c: &Common) -> Result<ParakeetTranscriber> {
     Ok(asr)
 }
 
-fn load_engine(c: &Common) -> Result<Engine> {
+pub(crate) fn load_engine(c: &Common, dir: &Path) -> Result<Engine> {
     let t = Instant::now();
     let committer = CommitterConfig {
         step_secs: c.step,
         context_secs: c.context,
         ..Default::default()
     };
-    let engine = Engine::load(
-        &c.models.join(&c.asr),
-        threads(c),
-        &c.provider,
-        c.hotwords.clone(),
-    )?
-    .with_committer(committer)
-    .with_vad(load_vad(c)?);
+    let engine = Engine::load(dir, threads(c), &c.provider, c.hotwords.clone())?
+        .with_committer(committer)
+        .with_vad(&c.models.join("silero_vad.onnx"))?;
     engine.warm_up()?;
     eprintln!("· loaded {} in {}", engine.name(), ms(t.elapsed()));
     Ok(engine)
@@ -180,10 +204,41 @@ fn transcribe(c: &Common, wav: &Path, no_vad: bool) -> Result<()> {
 }
 
 fn stream(c: &Common, wav: &Path, fast: bool) -> Result<()> {
-    let engine = load_engine(c)?;
+    let engine = load_engine(c, &c.models.join(&c.asr))?;
     let pcm = load_wav_16k(wav)?;
-    let mut session = engine.session();
+    let r = replay(&engine, &pcm, fast, true)?;
+    println!("\n\n{}", r.text);
+    eprintln!(
+        "· audio {:.2}s · {} decodes ({} total, {:.0}% of audio time) · tail {:.2}s in {} · key-up → text {}",
+        samples_to_secs(pcm.len()),
+        r.stats.decodes,
+        ms(r.stats.decode_time),
+        100.0 * r.cpu_share(),
+        r.stats.tail_secs,
+        ms(r.stats.tail_time),
+        ms(r.latency)
+    );
+    Ok(())
+}
 
+pub(crate) struct Replay {
+    pub text: String,
+    pub stats: SessionStats,
+    /// Key-up → final text.
+    pub latency: Duration,
+    pub audio_secs: f32,
+}
+
+impl Replay {
+    /// Decode time as a share of audio time: roughly the CPU the ASR keeps busy while you talk.
+    pub fn cpu_share(&self) -> f32 {
+        self.stats.decode_time.as_secs_f32() / self.audio_secs.max(1e-3)
+    }
+}
+
+/// Feeds a recording through a session in 100 ms chunks, as the mic would, then "releases the key".
+pub(crate) fn replay(engine: &Engine, pcm: &[f32], fast: bool, print: bool) -> Result<Replay> {
+    let mut session = engine.session()?;
     const CHUNK: usize = 1_600; // 100 ms, roughly what the mic pump delivers
     let start = Instant::now();
     for (i, chunk) in pcm.chunks(CHUNK).enumerate() {
@@ -194,29 +249,24 @@ fn stream(c: &Common, wav: &Path, fast: bool) -> Result<()> {
                 std::thread::sleep(wait);
             }
         }
-        print_committed(&session.push(chunk)?);
+        let words = session.push(chunk)?;
+        if print {
+            print_committed(&words);
+        }
     }
-
     // "Key up": everything after this is user-visible latency.
     let key_up = Instant::now();
     let (hyp, stats) = session.finish()?;
-    let latency = key_up.elapsed();
-    println!("\n\n{}", hyp.text());
-    eprintln!(
-        "· audio {:.2}s · {} decodes ({} total, {:.0}% of audio time) · tail {:.2}s in {} · key-up → text {}",
-        samples_to_secs(pcm.len()),
-        stats.decodes,
-        ms(stats.decode_time),
-        100.0 * stats.decode_time.as_secs_f32() / samples_to_secs(pcm.len()),
-        stats.tail_secs,
-        ms(stats.tail_time),
-        ms(latency)
-    );
-    Ok(())
+    Ok(Replay {
+        text: hyp.text(),
+        stats,
+        latency: key_up.elapsed(),
+        audio_secs: samples_to_secs(pcm.len()),
+    })
 }
 
 fn listen(c: &Common, device: Option<&str>, save: Option<&Path>) -> Result<()> {
-    let engine = load_engine(c)?;
+    let engine = load_engine(c, &c.models.join(&c.asr))?;
     let vad = load_vad(c)?;
 
     let (tx, rx) = crossbeam_channel::unbounded::<Vec<f32>>();
@@ -229,7 +279,7 @@ fn listen(c: &Common, device: Option<&str>, save: Option<&Path>) -> Result<()> {
     let stopping = AtomicBool::new(false);
     std::thread::scope(|s| -> Result<()> {
         let worker = s.spawn(|| -> Result<_> {
-            let mut session = engine.session();
+            let mut session = engine.session()?;
             let mut all = Vec::new();
             // The channel closes once the mic is stopped and the pump has flushed.
             // Coalesce everything queued into one push, so a slow decode is followed by one

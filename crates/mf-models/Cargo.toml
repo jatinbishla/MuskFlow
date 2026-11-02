@@ -1,0 +1,9 @@
+[package]
+name = "mf-models"
+description = "MuskFlow model tiers (Lite / Standard / Max) and where their files live"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true

@@ -7,12 +7,17 @@
 
 mod committer;
 mod parakeet;
+mod phrases;
 mod streaming;
+mod whisper;
 
 pub use committer::{Committer, CommitterConfig};
 pub use parakeet::{ParakeetConfig, ParakeetTranscriber};
+pub use phrases::PhraseSession;
 pub use streaming::{StreamingConfig, StreamingParakeet};
+pub use whisper::{WhisperConfig, WhisperTranscriber};
 
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -85,47 +90,72 @@ pub struct SessionStats {
 /// A loaded ASR model that can start dictation sessions.
 pub enum Engine {
     Offline {
-        asr: ParakeetTranscriber,
+        asr: Box<dyn Transcriber>,
         hotwords: Vec<String>,
         cfg: CommitterConfig,
+        /// Decode VAD-cut phrases instead of re-decoding a sliding window. Needed by
+        /// models without reliable word timestamps (Whisper).
+        by_phrase: bool,
+        vad_model: Option<PathBuf>,
         vad: Option<mf_audio::SpeechTrimmer>,
     },
     Streaming(StreamingParakeet),
 }
 
+/// Longest phrase decoded in one go when the speaker never pauses.
+const MAX_PHRASE_SECS: f32 = 8.0;
+
 impl Engine {
-    /// Loads the model in `model_dir`; directories with "streaming" in the name use the native streaming backend.
+    /// Loads the model in `model_dir`. The backend follows the directory name:
+    /// "streaming" → native streaming Parakeet, "whisper" → Whisper by phrase,
+    /// anything else → Parakeet with the LocalAgreement committer.
     pub fn load(
-        model_dir: &std::path::Path,
+        model_dir: &Path,
         num_threads: i32,
         provider: &str,
         hotwords: Vec<String>,
     ) -> Result<Self> {
-        let is_streaming = model_dir.to_string_lossy().contains("streaming");
-        if is_streaming {
+        let dir = model_dir.to_string_lossy();
+        if dir.contains("streaming") {
             let mut cfg = StreamingConfig::new(model_dir);
             cfg.num_threads = num_threads;
             cfg.provider = provider.into();
             return Ok(Self::Streaming(StreamingParakeet::load(&cfg)?));
         }
-        let mut cfg = ParakeetConfig::new(model_dir);
-        cfg.num_threads = num_threads;
-        cfg.provider = provider.into();
-        cfg.hotwords = !hotwords.is_empty();
+        let by_phrase = dir.contains("whisper");
+        let asr: Box<dyn Transcriber> = if by_phrase {
+            let mut cfg = WhisperConfig::new(model_dir);
+            cfg.num_threads = num_threads;
+            cfg.provider = provider.into();
+            Box::new(WhisperTranscriber::load(&cfg)?)
+        } else {
+            let mut cfg = ParakeetConfig::new(model_dir);
+            cfg.num_threads = num_threads;
+            cfg.provider = provider.into();
+            cfg.hotwords = !hotwords.is_empty();
+            Box::new(ParakeetTranscriber::load(&cfg)?)
+        };
         Ok(Self::Offline {
-            asr: ParakeetTranscriber::load(&cfg)?,
+            asr,
             hotwords,
             cfg: CommitterConfig::default(),
+            by_phrase,
+            vad_model: None,
             vad: None,
         })
     }
 
-    /// Lets the offline committer use VAD to tell silence from dropped speech. No-op for streaming models.
-    pub fn with_vad(mut self, trimmer: mf_audio::SpeechTrimmer) -> Self {
-        if let Self::Offline { vad, .. } = &mut self {
-            *vad = Some(trimmer);
+    /// Gives offline sessions Silero VAD: to tell silence from dropped speech, and to cut
+    /// phrases for by-phrase models. Required for Whisper. No-op for streaming models.
+    pub fn with_vad(mut self, model: &Path) -> Result<Self> {
+        if let Self::Offline { vad, vad_model, .. } = &mut self {
+            *vad = Some(mf_audio::SpeechTrimmer::load(
+                model,
+                mf_audio::VadConfig::default(),
+            )?);
+            *vad_model = Some(model.to_path_buf());
         }
-        self
+        Ok(self)
     }
 
     /// Tunes how often an offline model re-decodes while the user speaks. No-op for streaming models.
@@ -143,28 +173,55 @@ impl Engine {
         }
     }
 
-    pub fn session(&self) -> Box<dyn Session + Send + '_> {
-        match self {
+    pub fn session(&self) -> Result<Box<dyn Session + Send + '_>> {
+        Ok(match self {
+            Self::Offline {
+                asr,
+                hotwords,
+                by_phrase: true,
+                vad_model,
+                ..
+            } => {
+                let model = vad_model.as_deref().ok_or_else(|| {
+                    anyhow::anyhow!("{} needs VAD: call Engine::with_vad", asr.name())
+                })?;
+                let segmenter = mf_audio::SpeechSegmenter::load(
+                    model,
+                    mf_audio::VadConfig::default(),
+                    MAX_PHRASE_SECS,
+                )?;
+                Box::new(PhraseSession::new(
+                    asr.as_ref(),
+                    hotwords.clone(),
+                    segmenter,
+                ))
+            }
             Self::Offline {
                 asr,
                 hotwords,
                 cfg,
                 vad,
+                ..
             } => {
-                let c = Committer::new(asr, hotwords.clone(), cfg.clone());
+                let c = Committer::new(asr.as_ref(), hotwords.clone(), cfg.clone());
                 Box::new(match vad {
                     Some(v) => c.with_vad(v),
                     None => c,
                 })
             }
             Self::Streaming(s) => Box::new(s.session()),
-        }
+        })
     }
 
     /// Runs a tiny decode so the first real dictation doesn't pay for lazy initialisation.
     pub fn warm_up(&self) -> Result<()> {
-        let mut s = self.session();
-        s.push(&vec![0.0; 16_000])?;
-        s.finish().map(|_| ())
+        match self {
+            Self::Offline { asr, .. } => asr.transcribe(&vec![0.0; 16_000], &[]).map(|_| ()),
+            Self::Streaming(_) => {
+                let mut s = self.session()?;
+                s.push(&vec![0.0; 16_000])?;
+                s.finish().map(|_| ())
+            }
+        }
     }
 }

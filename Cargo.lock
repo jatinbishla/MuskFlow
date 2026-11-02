@@ -971,6 +971,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mf-eval"
+version = "0.1.0"
+
+[[package]]
+name = "mf-models"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+]
+
+[[package]]
 name = "miniz_oxide"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -991,6 +1002,8 @@ dependencies = [
  "log",
  "mf-asr",
  "mf-audio",
+ "mf-eval",
+ "mf-models",
 ]
 
 [[package]]

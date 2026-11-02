@@ -11,6 +11,8 @@ repository = "https://github.com/jatinbishla/MuskFlow"
 [workspace.dependencies]
 mf-audio = { path = "crates/mf-audio" }
 mf-asr = { path = "crates/mf-asr" }
+mf-eval = { path = "crates/mf-eval" }
+mf-models = { path = "crates/mf-models" }
 anyhow = "1.0"
 thiserror = "2"
 cpal = "0.18"

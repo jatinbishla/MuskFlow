@@ -355,9 +355,19 @@ Strategy chain per app (learned: remember which method worked per app id):
 
 | Tier | Target machine | ASR | Cleanup | Disk | Active RAM |
 |---|---|---|---|---|---|
-| **Lite** | 8 GB, CPU-only / old Intel | Moonshine base or Parakeet-0.6B int8 | `muskflow-clean-0.6b` Q4 + rules | ~0.8 GB | ~0.9 GB |
-| **Standard** | Apple Silicon 8–16 GB, any GPU laptop | Parakeet-TDT-0.6B-v3 int8 | `muskflow-clean-1.5b` Q4_K_M | ~1.4 GB | ~1.6 GB |
-| **Max** | 16 GB+ Apple Silicon / 8 GB VRAM | Parakeet + Whisper-turbo (multilingual) | `muskflow-clean-1.5b` (Clean) + `muskflow-polish-4b` (Polish/Command) | ~4.5 GB | ~4 GB |
+| **Lite** | 8 GB, CPU-only / old Intel | Parakeet-TDT 110M int8 (committer) | `muskflow-clean-0.6b` Q4 + rules | ~0.8 GB | ~0.9 GB |
+| **Standard** | Apple Silicon 8–16 GB, any GPU laptop | Parakeet-TDT 0.6B v3 int8 (committer) | `muskflow-clean-1.5b` Q4_K_M | ~1.4 GB | ~1.6 GB |
+| **Max** | 16 GB+ Apple Silicon / 8 GB VRAM | Whisper large-v3-turbo, decoded by VAD phrase (99 languages) | `muskflow-clean-1.5b` (Clean) + `muskflow-polish-4b` (Polish/Command) | ~4.5 GB | ~4 GB |
+
+**Lite must be as accurate as Max.** Lite users are the people with the weakest laptops, and they deserve the same result. So:
+
+1. **Every benchmark runs all three tiers** (`muskflow bench`), and the report leads with each tier's *gap to the best tier*.
+2. A change that helps one tier and hurts another doesn't ship.
+3. Close the gap with things that cost Lite nothing at run time:
+   - context and dictionary hotwords (names),
+   - the cleanup LLM with screen context (spellings, fillers, numbers),
+   - **distillation**: Max transcripts of real and synthetic speech become fine-tuning labels for the Lite ASR and the small cleanup model (§12.1).
+4. Lite may be slower to *learn* (it needs more fine-tuning), but not less accurate at the end.
 
 Base models for our fine-tunes are chosen by MuskFlow-Bench, not by reputation. Candidates: Qwen 3.5 0.8B/2B, Llama 3.2 1B, Gemma edge variants. Check every licence before redistributing.
 

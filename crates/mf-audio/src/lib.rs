@@ -6,7 +6,7 @@ mod vad;
 mod wav;
 
 pub use capture::{MicCapture, MicDevice, MicInfo, list_inputs};
-pub use vad::{SpeechTrimmer, VadConfig};
+pub use vad::{SpeechSegment, SpeechSegmenter, SpeechTrimmer, VadConfig};
 pub use wav::{load_wav_16k, save_wav_16k};
 
 /// Every model in the pipeline consumes 16 kHz mono f32 PCM.

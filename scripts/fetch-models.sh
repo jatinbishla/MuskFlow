@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# Downloads the dev models into ./models (gitignored).
-# The desktop app will use mf-models + models/manifest.json instead; this is for local development.
+# Downloads models into ./models (gitignored), by tier.
+#
+#   scripts/fetch-models.sh                 # standard (the default tier)
+#   scripts/fetch-models.sh lite standard max
+#
+# The desktop app will use mf-models + a manifest instead; this is for local development.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -16,13 +20,23 @@ fetch() { # url out
   mv "$2.part" "$2"
 }
 
+model() { # sherpa archive name
+  if [ ! -d "$1" ]; then
+    fetch "$BASE/$1.tar.bz2" "$1.tar.bz2"
+    tar xjf "$1.tar.bz2"
+    rm "$1.tar.bz2"
+  fi
+  echo "✓ $1"
+}
+
+# Every tier uses Silero VAD.
 fetch "$BASE/silero_vad.onnx" silero_vad.onnx
 
-PARAKEET=sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8
-if [ ! -d "$PARAKEET" ]; then
-  fetch "$BASE/$PARAKEET.tar.bz2" "$PARAKEET.tar.bz2"
-  tar xjf "$PARAKEET.tar.bz2"
-  rm "$PARAKEET.tar.bz2"
-fi
-echo "✓ $PARAKEET"
-ls -lh "$DEST/$PARAKEET"
+for tier in "${@:-standard}"; do
+  case "$tier" in
+    lite) model sherpa-onnx-nemo-parakeet_tdt_transducer_110m-en-36000-int8 ;;    # ~110 MB
+    standard) model sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8 ;;                 # ~650 MB
+    max) model sherpa-onnx-whisper-turbo ;;                                       # ~1 GB
+    *) echo "unknown tier '$tier' (lite, standard, max)" >&2; exit 1 ;;
+  esac
+done

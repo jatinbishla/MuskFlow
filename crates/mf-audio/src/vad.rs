@@ -34,6 +34,91 @@ impl Default for VadConfig {
     }
 }
 
+fn create_vad(
+    model: &Path,
+    cfg: &VadConfig,
+    max_speech_secs: f32,
+) -> Result<VoiceActivityDetector> {
+    let config = VadModelConfig {
+        silero_vad: SileroVadModelConfig {
+            model: Some(model.to_string_lossy().into_owned()),
+            threshold: cfg.threshold,
+            min_silence_duration: cfg.min_silence_secs,
+            min_speech_duration: cfg.min_speech_secs,
+            window_size: WINDOW as i32,
+            max_speech_duration: max_speech_secs,
+        },
+        sample_rate: SAMPLE_RATE as i32,
+        num_threads: 1,
+        ..Default::default()
+    };
+    VoiceActivityDetector::create(&config, 330.0)
+        .ok_or_else(|| anyhow!("could not load Silero VAD from {}", model.display()))
+}
+
+/// A finished stretch of speech, cut by VAD at a pause.
+#[derive(Debug, Clone)]
+pub struct SpeechSegment {
+    /// Start, in samples since the stream began.
+    pub start: usize,
+    pub samples: Vec<f32>,
+}
+
+/// Incremental VAD: feed audio as it arrives, get back each phrase once the speaker pauses.
+pub struct SpeechSegmenter {
+    vad: VoiceActivityDetector,
+    pending: Vec<f32>,
+}
+
+impl SpeechSegmenter {
+    /// `max_phrase_secs` force-splits speech that never pauses, so no single decode gets too long.
+    pub fn load(model: &Path, cfg: VadConfig, max_phrase_secs: f32) -> Result<Self> {
+        Ok(Self {
+            vad: create_vad(model, &cfg, max_phrase_secs)?,
+            pending: Vec::with_capacity(WINDOW),
+        })
+    }
+
+    /// Feeds audio; returns phrases that ended during this call.
+    pub fn push(&mut self, pcm: &[f32]) -> Vec<SpeechSegment> {
+        self.pending.extend_from_slice(pcm);
+        let whole = self.pending.len() / WINDOW * WINDOW;
+        for window in self.pending[..whole].chunks(WINDOW) {
+            self.vad.accept_waveform(window);
+        }
+        self.pending.drain(..whole);
+        self.drain()
+    }
+
+    /// End of input: returns whatever speech is still open.
+    pub fn flush(&mut self) -> Vec<SpeechSegment> {
+        if !self.pending.is_empty() {
+            let mut last = std::mem::take(&mut self.pending);
+            last.resize(WINDOW, 0.0);
+            self.vad.accept_waveform(&last);
+        }
+        self.vad.flush();
+        self.drain()
+    }
+
+    /// Whether the speaker is talking right now.
+    pub fn in_speech(&self) -> bool {
+        self.vad.detected()
+    }
+
+    fn drain(&mut self) -> Vec<SpeechSegment> {
+        let mut out = Vec::new();
+        while let Some(seg) = self.vad.front() {
+            out.push(SpeechSegment {
+                start: seg.start().max(0) as usize,
+                samples: seg.samples().to_vec(),
+            });
+            self.vad.pop();
+        }
+        out
+    }
+}
+
 pub struct SpeechTrimmer {
     vad: VoiceActivityDetector,
     pad: usize,
@@ -41,21 +126,7 @@ pub struct SpeechTrimmer {
 
 impl SpeechTrimmer {
     pub fn load(model: &Path, cfg: VadConfig) -> Result<Self> {
-        let config = VadModelConfig {
-            silero_vad: SileroVadModelConfig {
-                model: Some(model.to_string_lossy().into_owned()),
-                threshold: cfg.threshold,
-                min_silence_duration: cfg.min_silence_secs,
-                min_speech_duration: cfg.min_speech_secs,
-                window_size: WINDOW as i32,
-                max_speech_duration: 300.0,
-            },
-            sample_rate: SAMPLE_RATE as i32,
-            num_threads: 1,
-            ..Default::default()
-        };
-        let vad = VoiceActivityDetector::create(&config, 330.0)
-            .ok_or_else(|| anyhow!("could not load Silero VAD from {}", model.display()))?;
+        let vad = create_vad(model, &cfg, 300.0)?;
         Ok(Self {
             vad,
             pad: secs_to_samples(cfg.pad_secs),
