@@ -6,11 +6,11 @@ members = ["crates/*", "apps/cli"]
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
-repository = "https://github.com/freeflow/freeflow"
+repository = "https://github.com/musk-flow/musk-flow"
 
 [workspace.dependencies]
-ff-audio = { path = "crates/ff-audio" }
-ff-asr = { path = "crates/ff-asr" }
+mf-audio = { path = "crates/mf-audio" }
+mf-asr = { path = "crates/mf-asr" }
 anyhow = "1.0"
 thiserror = "2"
 cpal = "0.18"

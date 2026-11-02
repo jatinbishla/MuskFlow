@@ -1,4 +1,4 @@
-//! Audio input for FreeFlow: microphone capture, resampling to 16 kHz mono,
+//! Audio input for MuskFlow: microphone capture, resampling to 16 kHz mono,
 //! WAV loading, and voice activity detection.
 
 mod capture;

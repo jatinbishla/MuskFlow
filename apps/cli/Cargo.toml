@@ -1,17 +1,17 @@
 [package]
-name = "freeflow-cli"
-description = "Headless FreeFlow: transcribe, stream, listen, bench"
+name = "muskflow-cli"
+description = "Headless MuskFlow: transcribe, stream, listen, bench"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "freeflow"
+name = "muskflow"
 path = "src/main.rs"
 
 [dependencies]
-ff-audio.workspace = true
-ff-asr.workspace = true
+mf-audio.workspace = true
+mf-asr.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 crossbeam-channel.workspace = true

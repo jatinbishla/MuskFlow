@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Downloads the dev models into ./models (gitignored).
-# The desktop app will use ff-models + models/manifest.json instead; this is for local development.
+# The desktop app will use mf-models + models/manifest.json instead; this is for local development.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

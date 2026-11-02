@@ -192,7 +192,7 @@ fn spawn_pump(
     };
 
     let handle = std::thread::Builder::new()
-        .name("ff-audio-pump".into())
+        .name("mf-audio-pump".into())
         .spawn(move || {
             let mut buf = Vec::with_capacity(input_rate as usize / 10);
             loop {

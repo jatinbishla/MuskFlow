@@ -1,4 +1,4 @@
-//! `freeflow` — headless FreeFlow for development, benchmarking and scripting.
+//! `muskflow` — headless MuskFlow for development, benchmarking and scripting.
 
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -7,12 +7,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
-use ff_asr::{CommitterConfig, Engine, ParakeetConfig, ParakeetTranscriber, Transcriber, Word};
-use ff_audio::{MicCapture, SpeechTrimmer, VadConfig, load_wav_16k, samples_to_secs};
+use mf_asr::{CommitterConfig, Engine, ParakeetConfig, ParakeetTranscriber, Transcriber, Word};
+use mf_audio::{MicCapture, SpeechTrimmer, VadConfig, load_wav_16k, samples_to_secs};
 
 #[derive(Parser)]
 #[command(
-    name = "freeflow",
+    name = "muskflow",
     version,
     about = "Local voice dictation that writes what you meant"
 )]
@@ -26,7 +26,7 @@ struct Cli {
 #[derive(Args)]
 struct Common {
     /// Directory with downloaded models (see scripts/fetch-models.sh).
-    #[arg(long, env = "FREEFLOW_MODELS", default_value = "models", global = true)]
+    #[arg(long, env = "MUSKFLOW_MODELS", default_value = "models", global = true)]
     models: PathBuf,
     /// ASR model directory name inside --models.
     #[arg(

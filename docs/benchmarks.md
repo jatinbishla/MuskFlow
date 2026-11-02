@@ -8,7 +8,7 @@ Test clip: 17.2 s synthetic messy dictation (`say -v Samantha`), containing fill
 
 The ASR is *supposed* to keep fillers and corrections: removing them is the cleanup LLM's job.
 
-## 2026-11-03 — ASR, streaming replay (`freeflow stream`, real time)
+## 2026-11-03 — ASR, streaming replay (`muskflow stream`, real time)
 
 | Model | Settings | Transcript quality | Decode CPU while speaking (% of audio time) | Key-up → text |
 |---|---|---|---|---|
@@ -18,7 +18,7 @@ The ASR is *supposed* to keep fillers and corrections: removing them is the clea
 | Parakeet-TDT 110M int8 | step 1.0 s, context 1.0 s, 4 threads | names wrong ("Kridaya"), a seam duplicate | 22 % | 84 ms |
 | Parakeet unified 0.6B streaming 560 ms | native streaming | dropped first sentence; re-encodes everything | 836 % | 7 s ❌ (config issue, not investigated yet) |
 
-One-shot (`freeflow transcribe`): Parakeet 0.6B v3 decodes 17 s in ~1.6 s (≈10× real time, 8 threads); CoreML provider gave no speed-up for the int8 model.
+One-shot (`muskflow transcribe`): Parakeet 0.6B v3 decodes 17 s in ~1.6 s (≈10× real time, 8 threads); CoreML provider gave no speed-up for the int8 model.
 
 ### Takeaways
 - **Default: Parakeet 0.6B v3 + committer, step 1 s, context 1 s.** Already inside the 350 ms end-to-end budget for the ASR share.
@@ -27,7 +27,7 @@ One-shot (`freeflow transcribe`): Parakeet 0.6B v3 decodes 17 s in ~1.6 s (≈10
 - Hotwords (`--hotwords`, beam search) had **no effect** and doubled the decode time. sherpa-onnx likely needs BPE-tokenised hotwords (`modeling_unit=bpe` + `bpe_vocab`). TODO.
 - Biggest remaining win: run Parakeet on the Apple Neural Engine / GPU (CoreML fp16 build) instead of int8 on CPU. That would cut CPU use while speaking from 30 % to a few % (battery).
 
-## 2026-11-03 — live mic (`freeflow listen`, MacBook Air M5, built-in mic)
+## 2026-11-03 — live mic (`muskflow listen`, MacBook Air M5, built-in mic)
 
 | Run | Speech | Enter → text | Notes |
 |---|---|---|---|

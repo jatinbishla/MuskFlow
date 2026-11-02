@@ -1,4 +1,4 @@
-//! Speech recognition for FreeFlow.
+//! Speech recognition for MuskFlow.
 //!
 //! [`Transcriber`] is the backend-agnostic interface; [`Committer`] turns any
 //! offline transcriber into a streaming one by locking in words as soon as two
