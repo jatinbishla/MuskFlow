@@ -166,6 +166,15 @@ impl Engine {
         self
     }
 
+    /// The underlying one-shot transcriber, for decoding a whole file at once.
+    /// `None` for native streaming models.
+    pub fn transcriber(&self) -> Option<&dyn Transcriber> {
+        match self {
+            Self::Offline { asr, .. } => Some(asr.as_ref()),
+            Self::Streaming(_) => None,
+        }
+    }
+
     pub fn name(&self) -> &str {
         match self {
             Self::Offline { asr, .. } => asr.name(),

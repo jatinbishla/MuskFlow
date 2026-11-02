@@ -59,7 +59,7 @@ pub fn run(
     let mut runs = Vec::new();
     for tier in tiers {
         if !tier.is_installed(&c.models) {
-            eprintln!("· {tier}: not installed, skipping (scripts/fetch-models.sh {tier})");
+            eprintln!("· {tier}: not installed, skipping (muskflow models install {tier})");
             continue;
         }
         let t = Instant::now();
@@ -85,7 +85,7 @@ pub fn run(
         });
     }
     if runs.is_empty() {
-        bail!("no tiers installed; run scripts/fetch-models.sh lite standard max");
+        bail!("no tiers installed; run: muskflow models install all");
     }
 
     let report = render(&clips, &runs, fast, show);

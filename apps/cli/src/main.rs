@@ -9,12 +9,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
-use mf_asr::{
-    CommitterConfig, Engine, ParakeetConfig, ParakeetTranscriber, SessionStats, Transcriber, Word,
-};
+use mf_asr::{CommitterConfig, Engine, SessionStats, Word};
 use mf_audio::{
     MicCapture, SpeechTrimmer, VadConfig, list_inputs, load_wav_16k, samples_to_secs, save_wav_16k,
 };
+use mf_models::{Tier, parse_tiers};
 
 #[derive(Parser)]
 #[command(
@@ -31,16 +30,15 @@ struct Cli {
 
 #[derive(Args)]
 pub(crate) struct Common {
-    /// Directory with downloaded models (see scripts/fetch-models.sh).
+    /// Directory for downloaded models (`muskflow models install` fills it).
     #[arg(long, env = "MUSKFLOW_MODELS", default_value = "models", global = true)]
     pub(crate) models: PathBuf,
-    /// ASR model directory name inside --models.
-    #[arg(
-        long,
-        default_value = "sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8",
-        global = true
-    )]
-    asr: String,
+    /// Model tier: lite, standard or max.
+    #[arg(long, env = "MUSKFLOW_TIER", default_value = "standard", global = true)]
+    tier: Tier,
+    /// Use this ASR model directory (inside --models) instead of the tier's.
+    #[arg(long, global = true)]
+    asr: Option<String>,
     /// Inference threads; 0 = all cores, capped at 8.
     #[arg(long, default_value_t = 0, global = true)]
     threads: i32,
@@ -85,6 +83,11 @@ enum Cmd {
     },
     /// List microphones.
     Devices,
+    /// Download or list models. Everything MuskFlow needs comes through here.
+    Models {
+        #[command(subcommand)]
+        action: ModelsCmd,
+    },
     /// Run every clip through every tier and compare accuracy, latency, CPU and size.
     Bench {
         /// Tiers to run (comma-separated).
@@ -105,6 +108,17 @@ enum Cmd {
     },
 }
 
+#[derive(Subcommand)]
+enum ModelsCmd {
+    /// Download the models for one or more tiers: lite, standard, max, or all.
+    Install {
+        #[arg(default_value = "standard", num_args = 1..)]
+        tiers: Vec<String>,
+    },
+    /// Show which tiers are installed.
+    List,
+}
+
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let cli = Cli::parse();
@@ -113,6 +127,12 @@ fn main() -> Result<()> {
         Cmd::Stream { wav, fast } => stream(&cli.common, wav, *fast),
         Cmd::Listen { mic, save } => listen(&cli.common, mic.as_deref(), save.as_deref()),
         Cmd::Devices => devices(),
+        Cmd::Models {
+            action: ModelsCmd::Install { tiers },
+        } => mf_models::install(&cli.common.models, &parse_tiers(tiers)?),
+        Cmd::Models {
+            action: ModelsCmd::List,
+        } => list_models(&cli.common.models),
         Cmd::Bench {
             tiers,
             clips,
@@ -139,18 +159,41 @@ fn threads(c: &Common) -> i32 {
     std::thread::available_parallelism().map_or(4, |n| n.get().min(8) as i32)
 }
 
-fn load_asr(c: &Common) -> Result<ParakeetTranscriber> {
-    let t = Instant::now();
-    let mut cfg = ParakeetConfig::new(c.models.join(&c.asr));
-    cfg.num_threads = threads(c);
-    cfg.provider = c.provider.clone();
-    cfg.hotwords = !c.hotwords.is_empty();
-    let asr = ParakeetTranscriber::load(&cfg)?;
-    eprintln!("· loaded {} in {}", asr.name(), ms(t.elapsed()));
-    Ok(asr)
+/// The ASR model directory: `--asr` if given, otherwise the tier's.
+fn asr_dir(c: &Common) -> PathBuf {
+    match &c.asr {
+        Some(dir) => c.models.join(dir),
+        None => c.tier.asr_path(&c.models),
+    }
+}
+
+fn list_models(models: &Path) -> Result<()> {
+    for tier in Tier::ALL {
+        let mark = if tier.is_installed(models) {
+            "✓ installed"
+        } else {
+            "· not installed"
+        };
+        println!(
+            "{:<9} {:<14} ~{:>4} MB download   {}",
+            tier.name(),
+            mark,
+            tier.download_mb(),
+            tier.asr_label()
+        );
+    }
+    eprintln!("· install with: muskflow models install <lite|standard|max|all>");
+    Ok(())
 }
 
 pub(crate) fn load_engine(c: &Common, dir: &Path) -> Result<Engine> {
+    if !dir.is_dir() {
+        anyhow::bail!(
+            "model {} isn't installed. Run: muskflow models install {}",
+            dir.display(),
+            c.tier
+        );
+    }
     let t = Instant::now();
     let committer = CommitterConfig {
         step_secs: c.step,
@@ -170,7 +213,10 @@ fn load_vad(c: &Common) -> Result<SpeechTrimmer> {
 }
 
 fn transcribe(c: &Common, wav: &Path, no_vad: bool) -> Result<()> {
-    let asr = load_asr(c)?;
+    let engine = load_engine(c, &asr_dir(c))?;
+    let asr = engine
+        .transcriber()
+        .context("native streaming models can't decode a file in one pass; use `stream`")?;
     let pcm = load_wav_16k(wav)?;
     let t = Instant::now();
     let speech = if no_vad {
@@ -204,7 +250,7 @@ fn transcribe(c: &Common, wav: &Path, no_vad: bool) -> Result<()> {
 }
 
 fn stream(c: &Common, wav: &Path, fast: bool) -> Result<()> {
-    let engine = load_engine(c, &c.models.join(&c.asr))?;
+    let engine = load_engine(c, &asr_dir(c))?;
     let pcm = load_wav_16k(wav)?;
     let r = replay(&engine, &pcm, fast, true)?;
     println!("\n\n{}", r.text);
@@ -266,7 +312,7 @@ pub(crate) fn replay(engine: &Engine, pcm: &[f32], fast: bool, print: bool) -> R
 }
 
 fn listen(c: &Common, device: Option<&str>, save: Option<&Path>) -> Result<()> {
-    let engine = load_engine(c, &c.models.join(&c.asr))?;
+    let engine = load_engine(c, &asr_dir(c))?;
     let vad = load_vad(c)?;
 
     let (tx, rx) = crossbeam_channel::unbounded::<Vec<f32>>();

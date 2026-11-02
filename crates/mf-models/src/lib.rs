@@ -1,7 +1,14 @@
-//! MuskFlow model tiers.
+//! MuskFlow model tiers, and installing them.
 //!
 //! Every tier runs the same pipeline; tiers differ only in model size. The bar
 //! is that Lite must be as accurate as Max, so every benchmark runs all three.
+//!
+//! [`install`] downloads everything a tier needs, so a user never has to visit
+//! another repository: `muskflow models install lite|standard|max|all`.
+
+mod install;
+
+pub use install::{Artifact, install};
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -51,9 +58,37 @@ impl Tier {
         models.join(self.asr_dir())
     }
 
+    /// Everything this tier needs on disk.
+    pub fn artifacts(self) -> Vec<Artifact> {
+        vec![
+            Artifact::silero_vad(),
+            Artifact::sherpa_asr(self.asr_dir(), self.download_mb()),
+        ]
+    }
+
+    /// Approximate download size of this tier's models, in MB.
+    pub fn download_mb(self) -> u32 {
+        match self {
+            Tier::Lite => 108,
+            Tier::Standard => 487,
+            Tier::Max => 564,
+        }
+    }
+
     /// Whether this tier's models are downloaded.
     pub fn is_installed(self, models: &Path) -> bool {
-        self.asr_path(models).is_dir()
+        self.artifacts().iter().all(|a| a.is_installed(models))
+    }
+
+    /// Suggested tier for a machine with this much RAM.
+    pub fn recommended(ram_gb: f64) -> Tier {
+        if ram_gb >= 16.0 {
+            Tier::Standard // Max needs a GPU/ANE to be fast; opt in explicitly
+        } else if ram_gb >= 8.0 {
+            Tier::Standard
+        } else {
+            Tier::Lite
+        }
     }
 }
 
@@ -61,6 +96,20 @@ impl fmt::Display for Tier {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.name())
     }
+}
+
+/// Parses tier names, where `all` means every tier.
+pub fn parse_tiers(names: &[String]) -> Result<Vec<Tier>> {
+    let mut out = Vec::new();
+    for n in names {
+        if n.eq_ignore_ascii_case("all") {
+            out.extend(Tier::ALL);
+        } else {
+            out.push(n.parse()?);
+        }
+    }
+    out.dedup();
+    Ok(out)
 }
 
 impl FromStr for Tier {

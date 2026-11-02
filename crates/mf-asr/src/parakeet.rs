@@ -45,7 +45,7 @@ impl ParakeetTranscriber {
             let p = cfg.model_dir.join(name);
             if !p.exists() {
                 return Err(anyhow!(
-                    "missing model file {} (run scripts/fetch-models.sh)",
+                    "missing model file {} (run: muskflow models install)",
                     p.display()
                 ));
             }
