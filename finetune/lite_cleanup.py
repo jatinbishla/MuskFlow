@@ -251,7 +251,8 @@ def names_in(text: str) -> set:
         core = w.strip(".,!?:;()\"'")
         if i == 0 or words[i - 1][-1:] in ".?!:" or re.match(r"^\d+[.)]$", words[i - 1]):
             continue
-        if len(core) > 1 and core[0].isupper() and core.lower() not in COMMON:
+        # Days and months aren't names: a self-correction rightly drops "Tuesday".
+        if len(core) > 1 and core[0].isupper() and core.lower() not in COMMON and core not in WEEKDAYS + MONTHS:
             out.add(core.lower())
     return out
 
