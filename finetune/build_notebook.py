@@ -57,6 +57,12 @@ gpu = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True).stdou
 assert "GPU" in gpu, "No GPU: Runtime → Change runtime type → T4 GPU, then Run all again."
 print(gpu)
 
+def sh(cmd):
+    # Runs a shell command and stops "Run all" if it fails, so later steps don't run on nothing.
+    get_ipython().system(cmd)
+    if get_ipython().user_ns.get("_exit_code", 0) != 0:
+        raise RuntimeError(f"step failed: {cmd}")
+
 from google.colab import drive
 drive.mount('/content/drive')
 W = '/content/drive/MyDrive/muskflow/work'   # every step saves here, so a disconnect loses nothing
@@ -65,6 +71,7 @@ OUT = '/content/drive/MyDrive/muskflow'
 %cd /content
 
 !pip install -q -U transformers peft accelerate num2words huggingface_hub safetensors
+!pip uninstall -q -y torchao   # Colab's copy is too old for peft, and we don't need it
 ![ -d llama.cpp ] || git clone -q --depth 1 https://github.com/ggml-org/llama.cpp
 !pip install -q ./llama.cpp/gguf-py sentencepiece
 ![ -x llama.cpp/build/bin/llama-quantize ] || (cmake -S llama.cpp -B llama.cpp/build -DLLAMA_CURL=OFF -DGGML_NATIVE=OFF > /dev/null && cmake --build llama.cpp/build --target llama-quantize -j 4 > /dev/null)
@@ -78,31 +85,32 @@ import os
 if os.path.exists(f"{OUT}/smoke-passed"):
     print("smoke test already passed")
 else:
-    !rm -rf /content/smoke
-    !python lite_cleanup.py gen --work /content/smoke --n 8 --batch 2
-    !python lite_cleanup.py pairs --work /content/smoke --versions 3
-    !python lite_cleanup.py train --work /content/smoke --batch 4 --max-steps 3
-    !python lite_cleanup.py export --work /content/smoke
-    !python lite_cleanup.py check --work /content/smoke --n 4
-    !python llama.cpp/convert_hf_to_gguf.py /content/smoke/merged --outtype f16 --outfile /content/smoke/test-f16.gguf > /content/smoke/convert.log 2>&1 || (tail -20 /content/smoke/convert.log; exit 1)
-    !test -s /content/smoke/test-f16.gguf && touch "{OUT}/smoke-passed" && echo "SMOKE TEST PASSED"
+    sh("rm -rf /content/smoke")
+    sh("python lite_cleanup.py gen --work /content/smoke --n 8 --batch 2")
+    sh("python lite_cleanup.py pairs --work /content/smoke --versions 3")
+    sh("python lite_cleanup.py train --work /content/smoke --batch 4 --max-steps 3")
+    sh("python lite_cleanup.py export --work /content/smoke")
+    sh("python lite_cleanup.py check --work /content/smoke --n 4")
+    sh("python llama.cpp/convert_hf_to_gguf.py /content/smoke/merged --outtype f16 --outfile /content/smoke/test-f16.gguf > /content/smoke/convert.log 2>&1 || (tail -20 /content/smoke/convert.log; exit 1)")
+    sh(f'test -s /content/smoke/test-f16.gguf && touch "{OUT}/smoke-passed"')
+    print("SMOKE TEST PASSED")
 """),
     md("## 3. Teacher writes clean messages (resumes if interrupted)"),
-    code('!python lite_cleanup.py gen --work "{W}" --n 2500 --batch 32'),
+    code('sh(f\'python lite_cleanup.py gen --work "{W}" --n 2500 --batch 32\')'),
     md("## 4. Messy / clean pairs"),
     code("""
-!python lite_cleanup.py pairs --work "{W}" --versions 2
-!head -n 6 "{W}/pairs.jsonl"
+sh(f'python lite_cleanup.py pairs --work "{W}" --versions 2')
+sh(f'head -n 6 "{W}/pairs.jsonl"')
 """),
     md("## 5. Fine-tune (checkpoints every 50 steps; resumes if interrupted)"),
-    code('!python lite_cleanup.py train --work "{W}" --batch 32 --epochs 2'),
+    code('sh(f\'python lite_cleanup.py train --work "{W}" --batch 32 --epochs 2\')'),
     md("## 6. Merge, check, convert"),
     code("""
-!python lite_cleanup.py export --work "{W}"
-!python lite_cleanup.py check --work "{W}" --n 200
-!python llama.cpp/convert_hf_to_gguf.py "{W}/merged" --outtype f16 --outfile /content/lite-f16.gguf
-!llama.cpp/build/bin/llama-quantize /content/lite-f16.gguf "{OUT}/MuskFlow-Lite-Cleanup-0.8B-Q4_K_M.gguf" Q4_K_M
-!ls -lh "{OUT}"
+sh(f'python lite_cleanup.py export --work "{W}"')
+sh(f'python lite_cleanup.py check --work "{W}" --n 200')
+sh(f'python llama.cpp/convert_hf_to_gguf.py "{W}/merged" --outtype f16 --outfile /content/lite-f16.gguf')
+sh(f'llama.cpp/build/bin/llama-quantize /content/lite-f16.gguf "{OUT}/MuskFlow-Lite-Cleanup-0.8B-Q4_K_M.gguf" Q4_K_M')
+sh(f'ls -lh "{OUT}"')
 print("Done. Download MuskFlow-Lite-Cleanup-0.8B-Q4_K_M.gguf from Google Drive → muskflow/")
 """),
 ]

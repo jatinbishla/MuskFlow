@@ -138,12 +138,15 @@ def cmd_gen(args):
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
-    random.seed(args.seed)
+    out = WORK / "clean.jsonl"
+    seen = {json.loads(l)["text"] for l in out.read_text().splitlines()} if out.exists() else set()
+    if len(seen) >= args.n:
+        print(f"{len(seen)} messages already written")
+        return
+    random.seed(args.seed + len(seen))
     grams = held_out_ngrams(Path(args.heldout))
     tok = AutoTokenizer.from_pretrained(TEACHER, padding_side="left")
     model = AutoModelForCausalLM.from_pretrained(TEACHER, dtype=torch.float16, device_map="cuda")
-    out = WORK / "clean.jsonl"
-    seen = {json.loads(l)["text"] for l in out.read_text().splitlines()} if out.exists() else set()
     dropped = 0
     with out.open("a") as f:
         while len(seen) < args.n:
@@ -349,7 +352,8 @@ TARGETS = r".*language_model\.layers\.\d+\.(self_attn\.(q|k|v|o)_proj|linear_att
 def split(pairs, seed):
     targets = sorted({p["target"] for p in pairs})
     random.Random(seed).shuffle(targets)
-    test = set(targets[: max(20, len(targets) // 25)])
+    # 4% held out (at least 20), but never more than a quarter: the smoke test has only a handful.
+    test = set(targets[: min(max(20, len(targets) // 25), max(1, len(targets) // 4))])
     return [p for p in pairs if p["target"] not in test], [p for p in pairs if p["target"] in test]
 
 
@@ -458,7 +462,7 @@ def cmd_train(args):
             if step % 20 == 0 or step == total:
                 el = time.time() - t0
                 print(f"step {step}/{total}  loss {loss.item():.4f}  {el / 60:.1f} min elapsed, ~{el / max(1, step - start) * (total - step) / 60:.1f} min left", flush=True)
-    model.save_pretrained(WORK / "lora")
+    model.save_pretrained(str(WORK / "lora"))
     print("saved", WORK / "lora")
 
 
@@ -479,7 +483,7 @@ def cmd_export(args):
         print(f"{dst} already exported")
         return
     src = Path(snapshot_download(BASE))
-    model = PeftModel.from_pretrained(load_base(torch.float32), WORK / "lora").merge_and_unload()
+    model = PeftModel.from_pretrained(load_base(torch.float32), str(WORK / "lora")).merge_and_unload()
     merged = {k: v for k, v in model.state_dict().items() if re.match(TARGETS, k)}
     dst.mkdir(exist_ok=True)
     for f in src.iterdir():
@@ -515,8 +519,8 @@ def cmd_check(args):
     import torch
     from transformers import AutoModelForImageTextToText, AutoTokenizer
 
-    tok = AutoTokenizer.from_pretrained(WORK / "merged", padding_side="left")
-    model = AutoModelForImageTextToText.from_pretrained(WORK / "merged", dtype=torch.float16, device_map="cuda").eval()
+    tok = AutoTokenizer.from_pretrained(str(WORK / "merged"), padding_side="left")
+    model = AutoModelForImageTextToText.from_pretrained(str(WORK / "merged"), dtype=torch.float16, device_map="cuda").eval()
     test = [json.loads(l) for l in (WORK / "test.jsonl").read_text().splitlines()][: args.n]
     errs, words, exact = 0.0, 0, 0
     for i in range(0, len(test), 16):
