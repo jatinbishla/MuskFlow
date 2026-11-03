@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::history::{Entry, History};
+use crate::settings::Settings;
 
 /// Typing speed used for "time saved": a typical typist, not a fast one.
 const TYPING_WPM: f64 = 40.0;
@@ -19,6 +20,7 @@ pub struct Hub {
     pub history: PathBuf,
     pub dictionary: PathBuf,
     pub tier: Tier,
+    pub settings: Settings,
 }
 
 #[derive(Deserialize)]
@@ -102,6 +104,18 @@ impl Hub {
                 "dictionary": self.dictionary.display().to_string(),
                 "history": self.history.display().to_string(),
             }),
+            "style" => json!({
+                "current": self.settings.style().map_or("auto", |s| s.name()),
+                "lite": self.tier == Tier::Lite,
+            }),
+            "set_style" => {
+                let style = match arg_str(args, "style")? {
+                    "auto" => None,
+                    name => Some(name.parse::<mf_cleanup::Style>()?),
+                };
+                self.settings.set_style(style)?;
+                json!(true)
+            }
             "set_login" => {
                 mf_shell::set_launch_at_login(args["on"].as_bool().unwrap_or(false))?;
                 json!(mf_shell::launch_at_login())

@@ -4,6 +4,7 @@ mod app;
 mod bench;
 mod history;
 mod hub;
+mod settings;
 
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -137,7 +138,12 @@ enum Cmd {
         out: Option<PathBuf>,
     },
     /// Clean up a piece of dictated text with the tier's LLM (reads stdin if no text given).
-    Clean { text: Option<String> },
+    Clean {
+        text: Option<String>,
+        /// clean, formal, casual or prompt.
+        #[arg(long, default_value = "clean")]
+        style: mf_cleanup::Style,
+    },
     /// Print the cleanup prompt for `text` as prefix, a NUL byte, then suffix (for fine-tuning).
     #[command(hide = true)]
     Prompt {
@@ -203,7 +209,7 @@ fn main() -> Result<()> {
             *no_cleanup,
             out.as_deref(),
         ),
-        Cmd::Clean { text } => clean(&cli.common, text.as_deref()),
+        Cmd::Clean { text, style } => clean(&cli.common, text.as_deref(), *style),
         Cmd::Prompt { text, compact } => {
             let (prefix, suffix) = if *compact {
                 mf_cleanup::build_compact_prompt(text)
@@ -291,13 +297,13 @@ pub(crate) fn load_cleaner(c: &Common, path: &Path) -> Result<Cleaner> {
     Ok(cleaner)
 }
 
-fn clean(c: &Common, text: Option<&str>) -> Result<()> {
+fn clean(c: &Common, text: Option<&str>, style: mf_cleanup::Style) -> Result<()> {
     let text = match text {
         Some(t) => t.to_string(),
         None => std::io::read_to_string(std::io::stdin())?,
     };
     let cleaner = load_cleaner(c, &llm_path(c, c.tier))?;
-    let r = cleaner.clean(&text)?;
+    let r = cleaner.clean_as(&text, style)?;
     println!("{}", r.text);
     let mut info = format!("· {:?} in {}", r.path, ms(r.time));
     if let Some(g) = &r.generation {

@@ -83,6 +83,11 @@
   .kv .k { color: var(--muted); }
   kbd { font: 12px ui-monospace, monospace; background: var(--hover); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; }
   .ok { color: var(--ok); font-weight: 600; } .no { color: var(--bad); font-weight: 600; }
+  .seg { display: inline-flex; background: var(--hover); border: 1px solid var(--line); border-radius: 9px; padding: 2px; gap: 2px; flex-wrap: wrap; }
+  .seg button { all: unset; padding: 5px 12px; border-radius: 7px; font-size: 13px; font-weight: 550; color: var(--muted); }
+  .seg button.on { background: var(--panel); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+  .styles { margin-top: 12px; display: grid; grid-template-columns: 110px 1fr; gap: 6px 14px; font-size: 13px; }
+  .styles .k { font-weight: 600; }
   .switch { position: relative; width: 36px; height: 20px; background: var(--line); border-radius: 999px; transition: background .15s; }
   .switch::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: left .15s; box-shadow: 0 1px 2px rgba(0,0,0,.25); }
   .switch.on { background: var(--accent); } .switch.on::after { left: 18px; }
@@ -146,6 +151,7 @@ const $ = (tag, props = {}, ...kids) => {
   return el;
 };
 const main = document.getElementById('main');
+const STYLE_LABELS = { auto: 'Auto', clean: 'Clean', formal: 'Formal', casual: 'Casual', prompt: 'AI prompt' };
 let page = 'home';
 
 function toast(msg) {
@@ -170,6 +176,7 @@ function entryRow(e, { actions = true } = {}) {
   const meta = $('div', { class: 'meta' },
     e.app ? $('span', { class: 'tag' }, e.app) : null,
     e.mode === 'command' ? $('span', { class: 'tag' }, 'command') : null,
+    e.style && e.style !== 'clean' ? $('span', { class: 'tag' }, STYLE_LABELS[e.style] || e.style) : null,
     $('span', {}, `${e.spoke_secs.toFixed(1)} s spoken`),
     $('span', {}, `${e.latency_ms} ms to type`));
   const row = $('div', { class: 'row' },
@@ -261,6 +268,17 @@ const pages = {
 
   async settings() {
     const s = await mf.call('settings');
+    const st = await mf.call('style');
+    const seg = $('div', { class: 'seg' });
+    for (const [key, label] of Object.entries(STYLE_LABELS)) {
+      const b = $('button', { class: key === st.current ? 'on' : '' }, label);
+      b.addEventListener('click', async () => {
+        await mf.call('set_style', { style: key });
+        seg.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
+        toast(key === 'auto' ? 'Style follows the app you type into' : `Always ${label}`);
+      });
+      seg.append(b);
+    }
     const yes = ok => $('span', { class: ok ? 'ok' : 'no' }, ok ? 'Allowed' : 'Not allowed');
     const sw = $('div', { class: 'switch' + (s.login ? ' on' : '') });
     sw.addEventListener('click', async () => {
@@ -277,6 +295,14 @@ const pages = {
           $('div', { class: 'k' }, 'Dictate'), $('div', {}, 'Hold ', $('kbd', {}, 'fn'), ', speak, let go'),
           $('div', { class: 'k' }, 'Command mode'), $('div', {}, 'Hold ', $('kbd', {}, 'fn'), ' + ', $('kbd', {}, 'control'), ' (coming soon)'),
           $('div', { class: 'k' }, 'Cancel'), $('div', {}, 'Press any other key while holding ', $('kbd', {}, 'fn')))),
+        $('div', { class: 'card' }, $('h3', {}, 'Writing style'), seg,
+          $('div', { class: 'styles' },
+            $('div', { class: 'k' }, 'Auto'), $('div', {}, 'Picks one from the app you\'re typing into.'),
+            $('div', { class: 'k' }, 'AI prompt'), $('div', {}, 'Claude, ChatGPT, Codex, Cursor, terminals: a clear, structured prompt.'),
+            $('div', { class: 'k' }, 'Formal'), $('div', {}, 'Mail, Gmail, Outlook, Teams, LinkedIn: polished, professional sentences.'),
+            $('div', { class: 'k' }, 'Casual'), $('div', {}, 'Slack, WhatsApp, Messages, Discord: your own voice, just cleaned.'),
+            $('div', { class: 'k' }, 'Clean'), $('div', {}, 'Everywhere else: fillers and false starts removed, nothing else changed.')),
+          st.lite ? $('p', { class: 'note' }, 'On the Lite tier, Formal and AI prompt use Clean for now; Lite\'s small model can\'t rewrite safely yet.') : null),
         $('div', { class: 'card' }, $('h3', {}, 'General'), $('div', { class: 'kv' },
           $('div', { class: 'k' }, 'Launch at login'), sw)),
         $('div', { class: 'card' }, $('h3', {}, 'Models'), $('div', { class: 'kv' },

@@ -15,7 +15,8 @@ pub enum State {
     /// Waiting for Fn.
     Ready,
     /// Fn is held.
-    Listening { command: bool },
+    /// `style` is shown next to "Listening", e.g. "AI prompt".
+    Listening { command: bool, style: String },
     /// Fn released: transcribing and cleaning up.
     Working,
     /// Text was typed.
@@ -439,16 +440,14 @@ mod imp {
                 match &state {
                     State::Loading => (Icon::Working, "Loading models…".into(), None, None),
                     State::Ready => (Icon::Idle, "Ready".into(), None, None),
-                    State::Listening { command: false } => (
+                    State::Listening { command, style } => (
                         Icon::Listening,
-                        "Listening".into(),
-                        Some("●  Listening".into()),
-                        Some("Tink"),
-                    ),
-                    State::Listening { command: true } => (
-                        Icon::Listening,
-                        "Listening (command)".into(),
-                        Some("●  Command".into()),
+                        format!("Listening · {style}"),
+                        Some(if *command {
+                            "●  Command".to_string()
+                        } else {
+                            format!("●  Listening · {style}")
+                        }),
                         Some("Tink"),
                     ),
                     State::Working => (

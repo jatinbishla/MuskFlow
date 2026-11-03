@@ -21,6 +21,9 @@ pub struct Entry {
     pub app: Option<String>,
     /// "dictate" or "command".
     pub mode: String,
+    /// Writing style used: "clean", "formal", "casual" or "prompt".
+    #[serde(default)]
+    pub style: Option<String>,
     /// Seconds of speech.
     pub spoke_secs: f32,
     /// Key-up → text on screen, in milliseconds.
@@ -119,6 +122,7 @@ mod tests {
             raw: text.into(),
             app: None,
             mode: "dictate".into(),
+            style: None,
             spoke_secs: 1.0,
             latency_ms: 300,
         }

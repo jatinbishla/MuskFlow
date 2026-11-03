@@ -43,6 +43,26 @@ const MAX_ADDED_SHARE: f32 = 0.10;
 /// The output must keep at least this share of the input's content words
 /// (self-corrections legitimately drop some).
 const MIN_KEPT_SHARE: f32 = 0.60;
+/// Rewriting styles rephrase more, so they need to keep less word-for-word.
+const MIN_KEPT_SHARE_REWRITE: f32 = 0.45;
+/// Words a rewrite may turn into list structure.
+const LIST_WORDS: &[&str] = &[
+    "first",
+    "second",
+    "third",
+    "fourth",
+    "fifth",
+    "firstly",
+    "secondly",
+    "thirdly",
+    "lastly",
+    "finally",
+    "next",
+    "things",
+    "following",
+];
+/// A rewrite may reword, but most of its content words should still be the speaker's.
+const MAX_ADDED_SHARE_REWRITE: f32 = 0.40;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Verdict {
@@ -135,9 +155,164 @@ pub fn check(raw: &str, cleaned: &str) -> Verdict {
     }
 }
 
+/// Rewriting styles (formal, AI prompt) may rephrase, so word-for-word overlap is
+/// too strict. What they must never do is invent facts or answer instead of rewrite:
+/// no names or numbers the speaker didn't say, and most of what they said survives.
+pub fn check_rewrite(raw: &str, rewritten: &str) -> Verdict {
+    let all_input = mf_eval::normalize(raw);
+    let input: HashSet<String> = content(raw).into_iter().collect();
+    // List markers would otherwise count as the words "one", "two", "three".
+    let unlisted: String = rewritten
+        .split_whitespace()
+        .filter(|w| !is_list_marker(w))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let output = content(&unlisted);
+    let output_set: HashSet<&str> = output.iter().map(String::as_str).collect();
+    let may_retract = retractable(&all_input);
+    let raw_lower = raw.to_lowercase();
+
+    // Names and numbers in the output that the speaker never said. List markers ("1.")
+    // are formatting, not facts.
+    let words: Vec<&str> = rewritten.split_whitespace().collect();
+    let added: Vec<String> = words
+        .iter()
+        .enumerate()
+        .filter(|(_, w)| !is_list_marker(w))
+        .filter_map(|(i, w)| {
+            let core = w.trim_matches(|c: char| !c.is_alphanumeric());
+            // After a list marker or sentence end, a capital is just a sentence start.
+            let starts_sentence = i == 0
+                || words[i - 1].ends_with(['.', '?', '!', ':'])
+                || is_list_marker(words[i - 1]);
+            let is_name = !starts_sentence
+                && core.chars().next().is_some_and(char::is_uppercase)
+                && core.len() > 1
+                && !matches!(core, "I" | "I'm" | "I'll" | "I've" | "I'd");
+            let is_number = core.chars().any(|c| c.is_ascii_digit());
+            ((is_name || is_number) && !mentions(&raw_lower, &all_input, core))
+                .then(|| core.to_string())
+        })
+        .collect();
+    // Ordinals become list numbering in a rewrite ("first … second …" → "1. … 2. …").
+    let stood_by: Vec<&String> = input
+        .iter()
+        .filter(|w| !may_retract.contains(*w) && !LIST_WORDS.contains(&w.as_str()))
+        .collect();
+    let kept = if stood_by.is_empty() {
+        1.0
+    } else {
+        stood_by
+            .iter()
+            .filter(|w| output_set.contains(w.as_str()))
+            .count() as f32
+            / stood_by.len() as f32
+    };
+    // Names the speaker said must survive a rewrite ("Hey Sarah" must not lose Sarah).
+    let rewritten_lower = rewritten.to_lowercase();
+    let dropped: Vec<String> = names(raw)
+        .into_iter()
+        .filter(|n| {
+            !may_retract.contains(&n.to_lowercase()) && !rewritten_lower.contains(&n.to_lowercase())
+        })
+        .collect();
+    let new_words = output.iter().filter(|w| !input.contains(*w)).count();
+    let reason = if rewritten.trim().is_empty() && !input.is_empty() {
+        Some("empty output")
+    } else if !added.is_empty() {
+        Some("added names or numbers the speaker didn't say")
+    } else if !dropped.is_empty() {
+        Some("dropped a name the speaker said")
+    } else if new_words > 2 && new_words as f32 > MAX_ADDED_SHARE_REWRITE * output.len() as f32 {
+        Some("added too much the speaker didn't say")
+    } else if kept < MIN_KEPT_SHARE_REWRITE {
+        Some("dropped too much of what was said")
+    } else if output.len() > 3 * input.len().max(4) {
+        Some("much longer than what was said (answered instead of rewrote?)")
+    } else {
+        None
+    };
+    Verdict {
+        added,
+        dropped,
+        kept,
+        reason,
+    }
+}
+
+/// "1." or "2)" at the start of a list item.
+fn is_list_marker(w: &str) -> bool {
+    let digits = w.trim_end_matches(['.', ')']);
+    w.len() > digits.len()
+        && !digits.is_empty()
+        && digits.len() <= 2
+        && digits.chars().all(|c| c.is_ascii_digit())
+}
+
+/// Capitalised words that aren't at a sentence start: the names a speech model heard.
+fn names(text: &str) -> Vec<String> {
+    let words: Vec<&str> = text.split_whitespace().collect();
+    words
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i > 0 && !words[i - 1].ends_with(['.', '?', '!']))
+        .map(|(_, w)| w.trim_matches(|c: char| !c.is_alphanumeric()))
+        .filter(|w| {
+            w.len() > 1
+                && w.chars().next().is_some_and(char::is_uppercase)
+                && !matches!(*w, "I" | "I'm" | "I'll" | "I've" | "I'd" | "OK" | "Okay")
+        })
+        .map(String::from)
+        .collect()
+}
+
+/// Whether the speaker said `word`, allowing for "$12,400" vs "twelve thousand four hundred".
+fn mentions(raw_lower: &str, normalized_raw: &[String], word: &str) -> bool {
+    let w = word.to_lowercase();
+    if raw_lower.contains(&w) {
+        return true;
+    }
+    let norm = mf_eval::normalize(word);
+    !norm.is_empty()
+        && normalized_raw
+            .windows(norm.len())
+            .any(|win| win.iter().zip(&norm).all(|(a, b)| a == b))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rewrites_may_rephrase_but_not_invent() {
+        let raw = "um so can you like help me write a function in python that takes a list of numbers and returns the average but ignore none values";
+        let ok = "Write a Python function that takes a list of numbers and returns the average, ignoring None values.";
+        assert!(check_rewrite(raw, ok).ok(), "{:?}", check_rewrite(raw, ok));
+        let invented = "Write a Python function for Stripe that returns the average of 10 numbers.";
+        assert!(!check_rewrite(raw, invented).ok());
+        let answered = "def average(nums):\n    vals = [n for n in nums if n is not None]\n    return sum(vals) / len(vals) if vals else 0.0\n\nThis function filters out None values, then divides the sum by the count, returning zero for an empty list so it never divides by zero, which is a common bug.";
+        assert!(!check_rewrite(raw, answered).ok());
+        let money = check_rewrite(
+            "the invoice is twelve thousand four hundred dollars",
+            "The invoice is $12,400.",
+        );
+        assert!(money.ok(), "{money:?}");
+        let list = check_rewrite(
+            "do the following first create a app second make it secure and third make it fast",
+            "Do the following:\n1. Create an app.\n2. Make it secure.\n3. Make it fast.",
+        );
+        assert!(list.ok(), "{list:?}");
+        let lost_name = check_rewrite(
+            "hey um Sarah did you get the invoice I sent on Monday",
+            "Hey, did you get the invoice I sent on Monday?",
+        );
+        assert_eq!(lost_name.reason, Some("dropped a name the speaker said"));
+        let padded = check_rewrite(
+            "Sarah did you get the invoice",
+            "Hi Sarah, I hope you're doing well and having a wonderful week. Did you get the invoice?",
+        );
+        assert!(!padded.ok());
+    }
 
     #[test]
     fn accepts_cleanup_and_reformatting() {

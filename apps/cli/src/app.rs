@@ -11,11 +11,14 @@ use std::time::{Instant, SystemTime};
 
 use anyhow::{Context, Result};
 use mf_audio::samples_to_secs;
-use mf_cleanup::Cleaner;
+use mf_cleanup::{Cleaner, Style};
+use mf_context::Focus;
 use mf_hotkey::{Event, Mode};
+use mf_models::Tier;
 use mf_shell::{State, Ui};
 
 use crate::history::{Entry, History};
+use crate::settings::Settings;
 use crate::{
     Common, asr_dir, dictionary, llm_path, load_cleaner, load_engine, load_vad, ms, record,
 };
@@ -82,10 +85,12 @@ pub fn run(c: &Common, device: Option<&str>) -> Result<()> {
     }
     c.dictionary = Some(dict_path.clone());
     let device = device.map(String::from);
+    let settings = Settings::load();
     let hub = crate::hub::Hub {
         history: History::default_path(),
         dictionary: dict_path.clone(),
         tier: c.tier,
+        settings: settings.clone(),
     };
     let config = mf_shell::Config {
         dictionary: dict_path,
@@ -96,14 +101,27 @@ pub fn run(c: &Common, device: Option<&str>) -> Result<()> {
         open_window: in_app_bundle(),
     };
     mf_shell::run(config, move |ui| {
-        if let Err(e) = dictate_loop(&c, device.as_deref(), &ui) {
+        if let Err(e) = dictate_loop(&c, device.as_deref(), &settings, &ui) {
             eprintln!("Error: {e:#}");
             ui.set(State::Error(format!("{e:#}")));
         }
     })
 }
 
-fn dictate_loop(c: &Common, device: Option<&str>, ui: &Ui) -> Result<()> {
+/// The style for this dictation: the user's fixed choice, or the one the focused app calls
+/// for. Lite's 0.8B model can't rewrite safely yet, so it keeps rewriting styles to Clean.
+fn pick_style(c: &Common, settings: &Settings, focus: Option<&Focus>) -> Style {
+    let style = settings
+        .style()
+        .unwrap_or_else(|| focus.map(Focus::style).unwrap_or_default());
+    if c.tier == Tier::Lite && style.rewrites() {
+        Style::Clean
+    } else {
+        style
+    }
+}
+
+fn dictate_loop(c: &Common, device: Option<&str>, settings: &Settings, ui: &Ui) -> Result<()> {
     let events = start_hotkey()?;
 
     let engine = load_engine(c, &asr_dir(c))?;
@@ -135,8 +153,12 @@ fn dictate_loop(c: &Common, device: Option<&str>, ui: &Ui) -> Result<()> {
         let Event::Down(mode) = events.recv()? else {
             continue;
         };
+        // Where the text will go, read now, while that app is still in front.
+        let focus = mf_context::focused();
+        let style = pick_style(c, settings, focus.as_ref());
         ui.set(State::Listening {
             command: mode == Mode::Command,
+            style: style.label().into(),
         });
         eprint!(
             "● listening{} ",
@@ -208,7 +230,7 @@ fn dictate_loop(c: &Common, device: Option<&str>, ui: &Ui) -> Result<()> {
         let raw = rec.hyp.text();
         let t = Instant::now();
         let text = match &cleaner {
-            Some(cl) => match cl.clean(&raw) {
+            Some(cl) => match cl.clean_as(&raw, style) {
                 Ok(cd) => cd.text,
                 Err(e) => {
                     log::warn!("cleanup failed: {e:#}");
@@ -231,7 +253,8 @@ fn dictate_loop(c: &Common, device: Option<&str>, ui: &Ui) -> Result<()> {
                     at: History::now_ms(),
                     text: text.clone(),
                     raw: raw.clone(),
-                    app: None,
+                    app: focus.as_ref().map(Focus::label),
+                    style: Some(style.name().into()),
                     mode: if final_mode == Mode::Command {
                         "command"
                     } else {

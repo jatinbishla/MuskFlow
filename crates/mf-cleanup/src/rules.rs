@@ -40,6 +40,30 @@ pub fn clean(raw: &str) -> String {
     capitalize_first(&s)
 }
 
+/// Drops stray fillers ("um", "uh") an LLM left in, keeping line breaks and lists intact.
+pub fn strip_fillers(text: &str) -> String {
+    text.lines()
+        .map(|line| {
+            let kept: Vec<&str> = line
+                .split(' ')
+                .filter(|w| {
+                    let core = w
+                        .trim_matches(|c: char| !c.is_alphanumeric())
+                        .to_lowercase();
+                    core.is_empty() || !is_filler(&core)
+                })
+                .collect();
+            let mut out = kept.join(" ");
+            // "yeah, um, I'm" leaves "yeah, I'm" once the filler and its comma go.
+            while out.contains(", ,") {
+                out = out.replace(", ,", ",");
+            }
+            out
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 fn capitalize_first(s: &str) -> String {
     let mut c = s.chars();
     match c.next() {
@@ -59,6 +83,14 @@ mod tests {
             "So hey Priya, can we push the review"
         );
         assert_eq!(clean("Uh."), "");
+    }
+
+    #[test]
+    fn strips_leftover_fillers_but_keeps_lines() {
+        assert_eq!(
+            strip_fillers("Haha yeah, um, I'm late.\n1. Grab a table, uh, please."),
+            "Haha yeah, I'm late.\n1. Grab a table, please."
+        );
     }
 
     #[test]

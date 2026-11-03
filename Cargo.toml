@@ -18,6 +18,7 @@ mf-cleanup = { path = "crates/mf-cleanup" }
 mf-hotkey = { path = "crates/mf-hotkey" }
 mf-insert = { path = "crates/mf-insert" }
 mf-shell = { path = "crates/mf-shell" }
+mf-context = { path = "crates/mf-context" }
 anyhow = "1.0"
 thiserror = "2"
 cpal = "0.18"

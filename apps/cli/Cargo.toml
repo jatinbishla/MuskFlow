@@ -19,6 +19,7 @@ mf-cleanup.workspace = true
 mf-hotkey.workspace = true
 mf-insert.workspace = true
 mf-shell.workspace = true
+mf-context.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 crossbeam-channel.workspace = true
