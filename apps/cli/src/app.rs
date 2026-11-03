@@ -21,6 +21,14 @@ const MIN_SPEECH_SECS: f32 = 0.3;
 
 pub fn run(c: &Common, device: Option<&str>) -> Result<()> {
     check_permissions();
+    let events = mf_hotkey::start()?;
+    // macOS lets a tap start without Input Monitoring but then never delivers a key to it,
+    // so "ready" would be a lie. The permission belongs to the app MuskFlow runs inside.
+    if !mf_hotkey::has_permission() {
+        anyhow::bail!(
+            "Fn won't reach MuskFlow until the app it runs in has Input Monitoring. Turn it on in System Settings → Privacy & Security → Input Monitoring, quit and reopen that app, then run this again.\n  Tip: use macOS Terminal, since apps that host a terminal (like Claude) need a full restart after the change."
+        );
+    }
 
     let engine = load_engine(c, &asr_dir(c))?;
     let vad = load_vad(c)?;
@@ -34,14 +42,6 @@ pub fn run(c: &Common, device: Option<&str>) -> Result<()> {
         );
         None
     };
-    let events = mf_hotkey::start()?;
-    // macOS lets a tap start without Input Monitoring but then never delivers a key to it,
-    // so "ready" would be a lie. The permission belongs to the app MuskFlow runs inside.
-    if !mf_hotkey::has_permission() {
-        anyhow::bail!(
-            "Fn won't reach MuskFlow until the app it runs in has Input Monitoring. Turn it on in System Settings → Privacy & Security → Input Monitoring, quit and reopen that app, then run this again.\n  Tip: use macOS Terminal, since apps that host a terminal (like Claude) need a full restart after the change."
-        );
-    }
     eprintln!(
         "· ready ({} tier). Hold Fn and speak; let go to type it. Fn + Control: command mode. Ctrl+C quits.",
         c.tier
