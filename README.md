@@ -46,6 +46,8 @@ The first time, allow MuskFlow under System Settings → Privacy & Security, the
 
 Also set System Settings → Keyboard → "Press 🌐 key to" → **Do Nothing**, so Fn doesn't open the emoji picker too. Pressing another key while holding Fn (Fn+←, Fn+F5) cancels, so Fn's shortcuts keep working. Fn + Control is reserved for command mode (coming soon). **It writes for where you are:** an AI prompt in Claude, ChatGPT, Codex, Cursor or a terminal; polished sentences in Mail, Gmail, Outlook and Teams; your own casual voice in Slack, WhatsApp and Messages; plain cleanup everywhere else. Open MuskFlow from the menu bar to see your history, edit your dictionary or fix one style. Your clipboard is restored after each dictation. Models stay loaded; the mic is on only while Fn is held. Log: `~/Library/Logs/MuskFlow.log`.
 
+To remove MuskFlow completely (app, permission entries, history, dictionary, settings, log and signing certificate), run `scripts/uninstall.sh`. Add `--keep-data` to keep your history and dictionary.
+
 From a terminal, `muskflow app` does the same. Grant the permissions to the terminal app instead.
 
 **Try it in the terminal** (speak, then press Enter):
