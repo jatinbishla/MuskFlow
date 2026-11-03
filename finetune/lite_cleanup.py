@@ -438,18 +438,22 @@ def cmd_train(args):
         for b in batches:
             if step >= total:
                 break
-            width = max(len(data[i][0]) for i in b)
-            ids = torch.full((len(b), width), tok.pad_token_id or 0)
-            labels = torch.full((len(b), width), -100)
-            mask = torch.zeros((len(b), width), dtype=torch.long)
-            for r, i in enumerate(b):
-                seq, plen = data[i]
-                ids[r, :len(seq)] = torch.tensor(seq)
-                labels[r, plen:len(seq)] = torch.tensor(seq[plen:])
-                mask[r, :len(seq)] = 1
-            with torch.autocast("cuda", dtype=amp):
-                loss = model(input_ids=ids.cuda(), attention_mask=mask.cuda(), labels=labels.cuda()).loss
-            scaler.scale(loss).backward()
+            # Micro-batches add up to one step: a 248k-word vocabulary makes the logits huge,
+            # so 32 examples at once don't fit a T4's 15 GB.
+            for m in range(0, len(b), args.micro):
+                mb = b[m:m + args.micro]
+                width = max(len(data[i][0]) for i in mb)
+                ids = torch.full((len(mb), width), tok.pad_token_id or 0)
+                labels = torch.full((len(mb), width), -100)
+                mask = torch.zeros((len(mb), width), dtype=torch.long)
+                for r, i in enumerate(mb):
+                    seq, plen = data[i]
+                    ids[r, :len(seq)] = torch.tensor(seq)
+                    labels[r, plen:len(seq)] = torch.tensor(seq[plen:])
+                    mask[r, :len(seq)] = 1
+                with torch.autocast("cuda", dtype=amp):
+                    loss = model(input_ids=ids.cuda(), attention_mask=mask.cuda(), labels=labels.cuda()).loss
+                scaler.scale(loss * len(mb) / len(b)).backward()
             scaler.unscale_(opt)
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             scaler.step(opt)
@@ -550,6 +554,7 @@ def main():
     ap.add_argument("--lr", type=float, default=2e-4)
     ap.add_argument("--epochs", type=float, default=2.0)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--micro", type=int, default=8, help="train: examples per forward pass (memory)")
     ap.add_argument("--max-steps", type=int, default=0, help="train: stop early (smoke test)")
     ap.add_argument("--work", default="work")
     args = ap.parse_args()

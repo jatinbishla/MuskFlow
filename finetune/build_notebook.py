@@ -52,7 +52,8 @@ The result is `MyDrive/muskflow/MuskFlow-Lite-Cleanup-0.8B-Q4_K_M.gguf` (~530 MB
 """),
     md("## 1. Connect Drive and install"),
     code("""
-import subprocess
+import os, subprocess
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"   # less fragmentation on a 15 GB T4
 gpu = subprocess.run(["nvidia-smi", "-L"], capture_output=True, text=True).stdout
 assert "GPU" in gpu, "No GPU: Runtime → Change runtime type → T4 GPU, then Run all again."
 print(gpu)
