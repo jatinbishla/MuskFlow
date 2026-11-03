@@ -20,6 +20,7 @@ pub struct Hub {
     pub history: PathBuf,
     pub dictionary: PathBuf,
     pub tier: Tier,
+    pub models: PathBuf,
     pub settings: Settings,
 }
 
@@ -116,6 +117,69 @@ impl Hub {
                 self.settings.set_style(style)?;
                 json!(true)
             }
+            "setup" => setup_status(),
+            "tiers" => json!(
+                Tier::ALL
+                    .iter()
+                    .map(|t| json!({
+                        "name": t.to_string(),
+                        "speech": t.asr_label(),
+                        "cleanup": t.llm_label(),
+                        "installed": t.is_installed(&self.models),
+                        "current": *t == self.tier,
+                    }))
+                    .collect::<Vec<_>>()
+            ),
+            "set_tier" => {
+                let tier: Tier = arg_str(args, "tier")?.parse()?;
+                if !tier.is_installed(&self.models) {
+                    bail!(
+                        "{tier} isn't downloaded yet. Run ./install.sh {tier} in the MuskFlow folder."
+                    );
+                }
+                self.settings.set_tier(tier)?;
+                restart();
+                json!(true)
+            }
+            "request" => {
+                match arg_str(args, "what")? {
+                    "mic" => mf_audio::request_mic_permission(),
+                    "accessibility" => {
+                        mf_insert::request_permission();
+                        open_settings("Privacy_Accessibility");
+                    }
+                    "input_monitoring" => {
+                        mf_hotkey::request_permission();
+                        open_settings("Privacy_ListenEvent");
+                    }
+                    "mic_settings" => open_settings("Privacy_Microphone"),
+                    "keyboard" => {
+                        let _ = std::process::Command::new("open")
+                            .arg("x-apple.systempreferences:com.apple.Keyboard-Settings.extension")
+                            .spawn();
+                    }
+                    other => bail!("can't request {other}"),
+                }
+                json!(true)
+            }
+            // Clears a permission entry left from an older build (a different signature), so
+            // macOS asks afresh. Only touches MuskFlow's own entry.
+            "reset_permission" => {
+                let service = match arg_str(args, "what")? {
+                    "accessibility" => "Accessibility",
+                    "input_monitoring" => "ListenEvent",
+                    other => bail!("can't reset {other}"),
+                };
+                std::process::Command::new("tccutil")
+                    .args(["reset", service, BUNDLE_ID])
+                    .status()
+                    .context("could not run tccutil")?;
+                json!(true)
+            }
+            "restart" => {
+                restart();
+                json!(true)
+            }
             "set_login" => {
                 mf_shell::set_launch_at_login(args["on"].as_bool().unwrap_or(false))?;
                 json!(mf_shell::launch_at_login())
@@ -152,6 +216,71 @@ impl Hub {
             .filter_map(line_term)
             .map(String::from)
             .collect())
+    }
+}
+
+const BUNDLE_ID: &str = "io.github.jatinbishla.muskflow";
+
+fn open_settings(pane: &str) {
+    let _ = std::process::Command::new("open")
+        .arg(format!(
+            "x-apple.systempreferences:com.apple.preference.security?{pane}"
+        ))
+        .spawn();
+}
+
+/// Everything the setup screen checks. `done` once dictation can work end to end.
+fn setup_status() -> Value {
+    let mic = match mf_audio::mic_permission() {
+        mf_audio::MicPermission::Granted => "granted",
+        mf_audio::MicPermission::Denied => "denied",
+        mf_audio::MicPermission::NotAsked => "not_asked",
+    };
+    let accessibility = mf_insert::has_permission();
+    let input_monitoring = mf_hotkey::has_permission();
+    let fn_key = fn_key_action();
+    json!({
+        "mic": mic,
+        "accessibility": accessibility,
+        "input_monitoring": input_monitoring,
+        "fn_key": fn_key,
+        "done": mic == "granted" && accessibility && input_monitoring,
+    })
+}
+
+/// What the 🌐/fn key does on its own (System Settings → Keyboard → "Press 🌐 key to").
+fn fn_key_action() -> &'static str {
+    let out = std::process::Command::new("defaults")
+        .args(["read", "com.apple.HIToolbox", "AppleFnUsageType"])
+        .output();
+    match out
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .as_deref()
+    {
+        Some("0") => "nothing",
+        Some("1") => "input_source",
+        Some("2") => "emoji",
+        Some("3") => "dictation",
+        // Never changed: macOS's default is the emoji picker.
+        _ => "emoji",
+    }
+}
+
+/// Starts a fresh copy of MuskFlow and quits this one. Input Monitoring only takes effect
+/// in a process started after it was allowed.
+fn restart() {
+    let bundle = std::env::current_exe().ok().and_then(|exe| {
+        exe.ancestors()
+            .find(|p| p.extension().is_some_and(|e| e == "app"))
+            .map(PathBuf::from)
+    });
+    if let Some(app) = bundle {
+        let _ = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!("sleep 0.5; open -n {:?}", app))
+            .spawn();
+        std::process::exit(0);
     }
 }
 

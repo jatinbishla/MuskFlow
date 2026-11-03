@@ -75,6 +75,11 @@ fn default_dictionary() -> PathBuf {
 
 pub fn run(c: &Common, device: Option<&str>) -> Result<()> {
     let mut c = c.clone();
+    let settings = Settings::load();
+    // A tier picked in the window wins over the one the app was built with, if installed.
+    if let Some(tier) = settings.tier().filter(|t| t.is_installed(&c.models)) {
+        c.tier = tier;
+    }
     let dict_path = c.dictionary.clone().unwrap_or_else(default_dictionary);
     if !dict_path.exists() {
         if let Some(dir) = dict_path.parent() {
@@ -85,11 +90,11 @@ pub fn run(c: &Common, device: Option<&str>) -> Result<()> {
     }
     c.dictionary = Some(dict_path.clone());
     let device = device.map(String::from);
-    let settings = Settings::load();
     let hub = crate::hub::Hub {
         history: History::default_path(),
         dictionary: dict_path.clone(),
         tier: c.tier,
+        models: c.models.clone(),
         settings: settings.clone(),
     };
     let config = mf_shell::Config {
@@ -122,8 +127,7 @@ fn pick_style(c: &Common, settings: &Settings, focus: Option<&Focus>) -> Style {
 }
 
 fn dictate_loop(c: &Common, device: Option<&str>, settings: &Settings, ui: &Ui) -> Result<()> {
-    let events = start_hotkey()?;
-
+    // Load first, so dictation works the moment setup is finished.
     let engine = load_engine(c, &asr_dir(c))?;
     let vad = load_vad(c)?;
     let dict_path = c
@@ -141,6 +145,7 @@ fn dictate_loop(c: &Common, device: Option<&str>, settings: &Settings, ui: &Ui) 
         );
         None
     };
+    let events = start_hotkey(ui)?;
     eprintln!(
         "· ready ({} tier). Hold Fn and speak; let go to type it. Fn + Control: command mode. Dictionary: {}",
         c.tier,
@@ -287,33 +292,30 @@ fn modified(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
-/// Asks for both permissions up front, so the macOS prompts appear at start, not
-/// mid-dictation, then starts the Fn watcher.
-fn start_hotkey() -> Result<crossbeam_channel::Receiver<Event>> {
-    if !mf_insert::has_permission() {
-        mf_insert::request_permission();
-        eprintln!(
-            "· MuskFlow needs Accessibility to type into other apps: System Settings → Privacy & Security → Accessibility."
-        );
+/// Starts the Fn watcher once Input Monitoring is allowed. Inside MuskFlow.app the setup
+/// screen walks the user through it, so this waits instead of failing; from a terminal it
+/// asks for the permissions and explains where they go.
+fn start_hotkey(ui: &Ui) -> Result<crossbeam_channel::Receiver<Event>> {
+    if !in_app_bundle() {
+        if !mf_insert::has_permission() {
+            mf_insert::request_permission();
+            eprintln!(
+                "· MuskFlow needs Accessibility to type into other apps: System Settings → Privacy & Security → Accessibility."
+            );
+        }
+        if !mf_hotkey::has_permission() {
+            mf_hotkey::request_permission();
+            anyhow::bail!(
+                "Allow Input Monitoring for the app you run MuskFlow in (System Settings → Privacy & Security → Input Monitoring), then restart that app. Use macOS Terminal: apps that host a terminal, like Claude, need a full restart."
+            );
+        }
     }
     if !mf_hotkey::has_permission() {
-        mf_hotkey::request_permission();
+        ui.set(State::Setup);
+        eprintln!("· waiting for Input Monitoring (finish setup in the MuskFlow window)");
+        while !mf_hotkey::has_permission() {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
     }
-    let events = mf_hotkey::start()?;
-    // macOS lets a tap start without Input Monitoring but then never delivers a key to it,
-    // so "ready" would be a lie. The permission belongs to the app MuskFlow runs inside.
-    if !mf_hotkey::has_permission() {
-        anyhow::bail!(
-            "Allow Input Monitoring for {}, then quit and reopen it. System Settings → Privacy & Security → Input Monitoring.",
-            if in_app_bundle() {
-                "MuskFlow"
-            } else {
-                "the app you run MuskFlow in (use macOS Terminal; apps that host a terminal, like Claude, need a full restart)"
-            }
-        );
-    }
-    eprintln!(
-        "· tip: set System Settings → Keyboard → \"Press 🌐 key to\" → Do Nothing, so Fn doesn't also open the emoji picker."
-    );
-    Ok(events)
+    mf_hotkey::start()
 }

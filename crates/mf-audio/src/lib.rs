@@ -2,10 +2,12 @@
 //! WAV loading, and voice activity detection.
 
 mod capture;
+mod permission;
 mod vad;
 mod wav;
 
 pub use capture::{MicCapture, MicDevice, MicInfo, list_inputs};
+pub use permission::{MicPermission, mic_permission, request_mic_permission};
 pub use vad::{SpeechSegment, SpeechSegmenter, SpeechTrimmer, VadConfig};
 pub use wav::{load_wav_16k, save_wav_16k};
 

@@ -127,3 +127,24 @@ Full report: [bench/2026-11-03-dictionary-tiers.md](bench/2026-11-03-dictionary-
 - **No regressions** on clips without dictionary terms.
 - **Still missed:** "Siobhan" (heard as "Chavon"/"Shivan"; the Irish spelling doesn't match the sound) and "Razape"→Razorpay on Lite.
 - **Lite still trails Max by 5.1 pts.** Most of the gap is self-corrections in `dictation` and fillers in `fast`, which is the fine-tuning target.
+
+## 2026-11-04: Lite cleanup fine-tune, round 1
+
+Full report: [bench/2026-11-04-lite-finetune-r1.md](bench/2026-11-04-lite-finetune-r1.md). The model was trained on a free Colab T4: 4,826 synthetic pairs, 2 epochs, 71 minutes. On 200 held-out synthetic pairs it scored 0.4% WER, with 170/200 exact.
+
+| Lite cleanup model | Final WER (11 real-speech clips) | Guard fallbacks |
+|---|---|---|
+| Qwen3.5-0.8B, few-shot (current) | **6.6%** | 2/11 |
+| MuskFlow-Lite-Cleanup-0.8B, round 1 | 6.9% | 1/11 |
+
+**It's a tie, not a win, so Lite keeps the base model.**
+
+- **Better:** self-corrections (`dictation` 15.4% → 7.7%) and `tech-gb` (12.5% → 8.3%).
+- **Worse, where the synthetic data was too narrow:**
+  1. **Phrase corrections.** "Wednesday at three PM, no, actually, make that Thursday morning" became "Thursday morning at 3 PM". The data only swapped single values.
+  2. **Real words deleted.** The data turned "um" into "I'm", so the model learned to delete real ones: "Hi, I'm Jatin" became "Hi Jatin". It also dropped a real "like".
+
+**Round 2 data:**
+- phrase-level corrections;
+- contrastive pairs that keep real "I'm/and/like/on";
+- the formal and AI-prompt styles, so Lite can use them too.

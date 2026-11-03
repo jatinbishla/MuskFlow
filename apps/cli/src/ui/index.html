@@ -94,6 +94,20 @@
   .stack > .card + .card { margin-top: 12px; }
   .card h3 { margin: 0 0 12px; font-size: 14px; }
   .note { color: var(--muted); font-size: 12.5px; margin-top: 10px; }
+  .steps { display: flex; flex-direction: column; gap: 10px; }
+  .step { display: flex; gap: 14px; align-items: flex-start; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .step.done { opacity: .72; }
+  .badge { width: 26px; height: 26px; border-radius: 50%; flex: none; display: grid; place-items: center; font-weight: 700; font-size: 13px; background: var(--hover); color: var(--muted); }
+  .step.done .badge { background: var(--ok); color: #fff; }
+  .step .what { flex: 1; }
+  .step .title { font-weight: 600; }
+  .step .why { color: var(--muted); font-size: 13px; margin-top: 2px; }
+  .step .more { font-size: 12.5px; color: var(--muted); margin-top: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .step .side { display: flex; gap: 6px; flex: none; align-self: center; }
+  .progress { height: 6px; background: var(--hover); border-radius: 99px; overflow: hidden; margin: 0 0 22px; }
+  .progress div { height: 100%; background: var(--accent); transition: width .3s; }
+  textarea { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; width: 100%; min-height: 64px; resize: vertical; outline: none; margin-top: 10px; -webkit-user-select: text; }
+  textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
   .toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; }
   .toast.show { opacity: .92; }
   @media (max-width: 900px) { .grid { grid-template-columns: repeat(2, 1fr); } }
@@ -107,6 +121,7 @@
     </svg>
     MuskFlow
   </div>
+  <button data-page="setup" id="nav-setup" hidden>Setup</button>
   <button data-page="home" class="on">Home</button>
   <button data-page="history">History</button>
   <button data-page="dictionary">Dictionary</button>
@@ -137,6 +152,7 @@ window.mf = {
     dot.className = 'dot' + (name === 'error' ? ' bad' : /Listening|Writing|Loading/.test(status) ? ' busy' : '');
     document.getElementById('status').textContent = status === 'Ready' ? 'Ready · hold Fn to dictate' : status;
     if (name === 'typed' && (page === 'home' || page === 'history')) show(page);
+    if (name === 'setup' && page !== 'setup') show('setup');
   },
 };
 
@@ -191,7 +207,67 @@ function entryRow(e, { actions = true } = {}) {
   return row;
 }
 
+let setupTimer = null, triedIt = false;
 const pages = {
+  async setup() {
+    const s = await mf.call('setup');
+    const fnOk = s.fn_key === 'nothing';
+    const steps = [
+      { done: s.mic === 'granted', title: 'Microphone', why: 'So MuskFlow can hear you while you hold fn.',
+        action: s.mic === 'denied'
+          ? ['Open Microphone settings', () => mf.call('request', { what: 'mic_settings' })]
+          : ['Allow', () => mf.call('request', { what: 'mic' })],
+        more: s.mic === 'denied' ? 'macOS remembers a "Don\'t Allow". Turn MuskFlow on in the list that opens.' : null },
+      { done: s.accessibility, title: 'Accessibility', why: 'So MuskFlow can type the text where your cursor is.',
+        action: ['Allow', () => mf.call('request', { what: 'accessibility' })],
+        more: 'In the list that opens, turn on MuskFlow.', reset: 'accessibility' },
+      { done: s.input_monitoring, title: 'Input Monitoring', why: 'So MuskFlow can see when you hold the fn key.',
+        action: ['Allow', () => mf.call('request', { what: 'input_monitoring' })],
+        more: 'Turn on MuskFlow, then restart it. macOS applies this one only after a restart.',
+        restart: true, reset: 'input_monitoring' },
+      { done: fnOk, title: 'Make fn do nothing else', why: 'Set "Press 🌐 key to" to "Do Nothing", so fn doesn\'t also open the emoji picker.',
+        action: ['Open Keyboard settings', () => mf.call('request', { what: 'keyboard' })] },
+    ];
+    const needed = steps.filter(x => !x.done).length;
+    const done = steps.length - needed + (triedIt ? 1 : 0);
+    const total = steps.length + 1;
+    const list = $('div', { class: 'steps' });
+    steps.forEach((st, i) => {
+      const more = $('div', { class: 'more' });
+      if (!st.done && st.more) more.append(st.more);
+      if (!st.done && st.restart) more.append($('button', { class: 'btn', onclick: () => mf.call('restart') }, 'Restart MuskFlow'));
+      if (!st.done && st.reset) more.append($('button', { class: 'btn', title: 'For an entry left over from an older MuskFlow build', onclick: async () => {
+        await mf.call('reset_permission', { what: st.reset }); await mf.call('request', { what: st.reset });
+        toast('Old entry cleared. Turn MuskFlow on again.');
+      } }, 'On but still not allowed? Reset'));
+      list.append($('div', { class: 'step' + (st.done ? ' done' : '') },
+        $('div', { class: 'badge' }, st.done ? '✓' : String(i + 1)),
+        $('div', { class: 'what' }, $('div', { class: 'title' }, st.title), $('div', { class: 'why' }, st.why), more.childNodes.length ? more : null),
+        st.done ? null : $('div', { class: 'side' }, $('button', { class: 'btn primary', onclick: st.action[1] }, st.action[0]))));
+    });
+    const ready = s.done;
+    const box = $('textarea', { placeholder: ready ? 'Click here, hold fn and say "Hello MuskFlow, this is working."' : 'Finish the steps above first.' });
+    if (!ready) box.disabled = true;
+    box.addEventListener('input', () => { if (box.value.trim().length > 3 && !triedIt) { triedIt = true; toast('It works 🎉'); show('setup'); } });
+    list.append($('div', { class: 'step' + (triedIt ? ' done' : '') },
+      $('div', { class: 'badge' }, triedIt ? '✓' : String(steps.length + 1)),
+      $('div', { class: 'what' }, $('div', { class: 'title' }, 'Try it'),
+        $('div', { class: 'why' }, 'Hold fn anywhere, speak, and let go.'), triedIt ? null : box)));
+    clearTimeout(setupTimer);
+    // Re-check every second while the user is in System Settings.
+    if (!(ready && fnOk && triedIt)) setupTimer = setTimeout(() => { if (page === 'setup' && document.activeElement !== box) show('setup'); }, 1000);
+    document.getElementById('nav-setup').hidden = ready && fnOk;
+    return [
+      $('h1', {}, needed ? 'Set up MuskFlow' : triedIt ? 'You\'re all set' : 'Almost there'),
+      $('p', { class: 'sub' }, needed
+        ? 'macOS asks you to allow a few things once. Each step turns green as soon as it\'s done.'
+        : 'Everything is allowed. Try it below, then hold fn anywhere you type.'),
+      $('div', { class: 'progress' }, $('div', { style: `width:${Math.round(100 * done / total)}%` })),
+      list,
+      !needed && triedIt ? $('p', { class: 'note' }, $('a', { href: '#', onclick: ev => { ev.preventDefault(); show('home'); } }, 'Go to Home →')) : null,
+    ];
+  },
+
   async home() {
     const { stats: s, recent } = await mf.call('home');
     const stat = (n, l) => $('div', { class: 'card stat' }, $('div', { class: 'n' }, n), $('div', { class: 'l' }, l));
@@ -269,6 +345,18 @@ const pages = {
   async settings() {
     const s = await mf.call('settings');
     const st = await mf.call('style');
+    const tiers = await mf.call('tiers');
+    const tierSeg = $('div', { class: 'seg' });
+    for (const t of tiers) {
+      const b = $('button', { class: t.current ? 'on' : '', title: t.installed ? `${t.speech} + ${t.cleanup}` : 'Not downloaded' },
+        t.name[0].toUpperCase() + t.name.slice(1) + (t.installed ? '' : ' ↓'));
+      b.addEventListener('click', async () => {
+        if (t.current) return;
+        try { toast(`Switching to ${t.name}…`); await mf.call('set_tier', { tier: t.name }); }
+        catch (err) { toast(err.message); }
+      });
+      tierSeg.append(b);
+    }
     const seg = $('div', { class: 'seg' });
     for (const [key, label] of Object.entries(STYLE_LABELS)) {
       const b = $('button', { class: key === st.current ? 'on' : '' }, label);
@@ -305,11 +393,10 @@ const pages = {
           st.lite ? $('p', { class: 'note' }, 'On the Lite tier, Formal and AI prompt use Clean for now; Lite\'s small model can\'t rewrite safely yet.') : null),
         $('div', { class: 'card' }, $('h3', {}, 'General'), $('div', { class: 'kv' },
           $('div', { class: 'k' }, 'Launch at login'), sw)),
-        $('div', { class: 'card' }, $('h3', {}, 'Models'), $('div', { class: 'kv' },
-          $('div', { class: 'k' }, 'Tier'), $('div', {}, s.tier[0].toUpperCase() + s.tier.slice(1)),
+        $('div', { class: 'card' }, $('h3', {}, 'Models'), tierSeg, $('div', { class: 'kv', style: 'margin-top:12px' },
           $('div', { class: 'k' }, 'Speech'), $('div', {}, s.speech),
           $('div', { class: 'k' }, 'Cleanup'), $('div', {}, s.cleanup)),
-          $('p', { class: 'note' }, 'Lite is fastest, Max most accurate. Switch tiers by rebuilding the app with scripts/make-app.sh lite|standard|max.')),
+          $('p', { class: 'note' }, 'Lite is fastest and smallest, Max most accurate. Switching restarts MuskFlow. Tiers marked ↓ aren\'t downloaded: run ./install.sh <tier> in the MuskFlow folder.')),
         $('div', { class: 'card' }, $('h3', {}, 'Permissions'), $('div', { class: 'kv' },
           $('div', { class: 'k' }, 'Input Monitoring'), yes(s.input_monitoring),
           $('div', { class: 'k' }, 'Accessibility'), yes(s.accessibility)),
@@ -330,7 +417,12 @@ async function show(name) {
   main.scrollTop = 0;
 }
 document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => show(b.dataset.page)));
-show('home');
+// Open on Setup until everything is allowed.
+mf.call('setup').then(s => {
+  const pending = !s.done || s.fn_key !== 'nothing';
+  document.getElementById('nav-setup').hidden = !pending;
+  show(pending ? 'setup' : 'home');
+}).catch(() => show('home'));
 </script>
 </body>
 </html>

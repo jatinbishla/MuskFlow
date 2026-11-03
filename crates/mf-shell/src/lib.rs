@@ -12,6 +12,8 @@ use std::path::PathBuf;
 pub enum State {
     /// Models are loading.
     Loading,
+    /// Waiting for the user to finish setup (permissions) in the window.
+    Setup,
     /// Waiting for Fn.
     Ready,
     /// Fn is held.
@@ -439,6 +441,12 @@ mod imp {
             let (icon, status, pill, sound): (Icon, String, Option<String>, Option<&str>) =
                 match &state {
                     State::Loading => (Icon::Working, "Loading models…".into(), None, None),
+                    State::Setup => (
+                        Icon::Error,
+                        "Finish setup in the MuskFlow window".into(),
+                        None,
+                        None,
+                    ),
                     State::Ready => (Icon::Idle, "Ready".into(), None, None),
                     State::Listening { command, style } => (
                         Icon::Listening,
@@ -560,6 +568,8 @@ mod imp {
         match state {
             State::Typed => "typed",
             State::Error(_) => "error",
+            State::Setup => "setup",
+            State::Ready => "ready",
             _ => "state",
         }
     }

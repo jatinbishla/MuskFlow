@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# MuskFlow installer: builds the app and downloads the model tiers you choose.
-# Everything comes through this one script; there's nothing else to clone or download.
+# MuskFlow installer: builds the app, downloads the model tiers you choose and, on a Mac,
+# installs and opens MuskFlow.app. Everything comes through this one script; there's
+# nothing else to clone or download.
 #
 #   ./install.sh                 # asks which tier, recommending one for this machine
 #   ./install.sh lite            # lite | standard | max | all (several allowed)
@@ -58,8 +59,18 @@ say "Downloading models: ${TIERS[*]}"
 "$BIN" models install "${TIERS[@]}"
 
 TIER="${TIERS[0]}"; [ "$TIER" = all ] && TIER=standard
-say "Done. Try it:"
-echo "  $BIN listen --tier $TIER        # dictate; press Enter to stop"
-echo "  $BIN models list                  # what's installed"
-echo "  $BIN models install max          # add another tier any time"
-[ "$(uname -s)" = Darwin ] && echo "  (macOS will ask for microphone access the first time.)"
+
+# ── 5. The app (macOS) ───────────────────────────────────────────────────────
+if [ "$(uname -s)" = Darwin ]; then
+  say "Installing MuskFlow.app…"
+  # A local signing certificate keeps macOS permissions across future updates.
+  scripts/make-signing-cert.sh
+  scripts/make-app.sh "$TIER"
+  open /Applications/MuskFlow.app
+  say "Done. MuskFlow is open: follow the setup screen (about a minute), then hold fn anywhere to dictate."
+  echo "  It lives in the menu bar. Re-run ./install.sh any time to update; your permissions stay."
+else
+  say "Done. Try it:"
+  echo "  $BIN listen --tier $TIER        # dictate; press Enter to stop"
+fi
+echo "  $BIN models install max          # add another tier any time, then pick it in Settings"
