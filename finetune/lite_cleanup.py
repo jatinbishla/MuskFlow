@@ -365,6 +365,9 @@ def cmd_train(args):
     from peft import LoraConfig, get_peft_model
     from transformers import AutoTokenizer
 
+    if (WORK / "lora" / "adapter_model.safetensors").exists():
+        print(f"{WORK / 'lora'} already trained; delete it to train again")
+        return
     bf16 = torch.cuda.is_bf16_supported()
     pairs = [json.loads(l) for l in (WORK / "pairs.jsonl").read_text().splitlines() if l.strip()]
     train, test = split(pairs, args.seed)
@@ -398,11 +401,31 @@ def cmd_train(args):
     scaler = torch.amp.GradScaler(enabled=not bf16)
     amp = torch.bfloat16 if bf16 else torch.float16
 
+    trainable = [p for p in model.parameters() if p.requires_grad]
+    ckpt = WORK / "checkpoint.pt"
+
+    def save_checkpoint():
+        tmp = ckpt.with_suffix(".tmp")
+        torch.save({"step": step, "weights": [p.detach().cpu() for p in trainable], "opt": opt.state_dict(),
+                    "sched": sched.state_dict(), "scaler": scaler.state_dict()}, tmp)
+        tmp.replace(ckpt)  # atomic, so a disconnect mid-save can't corrupt it
+
     rng = random.Random(args.seed)
     model.train()
     step = 0
+    if ckpt.exists():  # Colab disconnected: carry on where we stopped
+        c = torch.load(ckpt, weights_only=False)
+        with torch.no_grad():
+            for p, w in zip(trainable, c["weights"]):
+                p.copy_(w.to(p.device))
+        opt.load_state_dict(c["opt"])
+        sched.load_state_dict(c["sched"])
+        scaler.load_state_dict(c["scaler"])
+        step = c["step"]
+        rng = random.Random(args.seed + step)
+        print(f"resuming from step {step}/{total}")
     import time
-    t0 = time.time()
+    t0, start = time.time(), step
     while step < total:
         # Length-bucketed batches: less padding, faster.
         order = sorted(range(len(data)), key=lambda i: len(data[i][0]) + rng.random() * 8)
@@ -430,9 +453,11 @@ def cmd_train(args):
             opt.zero_grad(set_to_none=True)
             sched.step()
             step += 1
+            if step % 50 == 0:
+                save_checkpoint()
             if step % 20 == 0 or step == total:
                 el = time.time() - t0
-                print(f"step {step}/{total}  loss {loss.item():.4f}  {el / 60:.1f} min elapsed, ~{el / step * (total - step) / 60:.1f} min left", flush=True)
+                print(f"step {step}/{total}  loss {loss.item():.4f}  {el / 60:.1f} min elapsed, ~{el / max(1, step - start) * (total - step) / 60:.1f} min left", flush=True)
     model.save_pretrained(WORK / "lora")
     print("saved", WORK / "lora")
 
@@ -440,7 +465,7 @@ def cmd_train(args):
 # ── 4. Merge into the original checkpoint ────────────────────────────────────
 
 def cmd_export(args):
-    """Adds the LoRA deltas to the original safetensors, keeping every other tensor (vision,
+    """Skips if already done. Adds the LoRA deltas to the original safetensors, keeping every other tensor (vision,
     MTP) and file untouched, so llama.cpp's converter sees exactly the official layout."""
     import shutil
 
@@ -449,10 +474,13 @@ def cmd_export(args):
     from peft import PeftModel
     from safetensors.torch import load_file, save_file
 
+    dst = WORK / "merged"
+    if (dst / "DONE").exists():
+        print(f"{dst} already exported")
+        return
     src = Path(snapshot_download(BASE))
     model = PeftModel.from_pretrained(load_base(torch.float32), WORK / "lora").merge_and_unload()
     merged = {k: v for k, v in model.state_dict().items() if re.match(TARGETS, k)}
-    dst = WORK / "merged"
     dst.mkdir(exist_ok=True)
     for f in src.iterdir():
         if not f.name.endswith(".safetensors"):
@@ -465,8 +493,9 @@ def cmd_export(args):
                 tensors[k] = merged[k].to(tensors[k].dtype).contiguous()
                 replaced += 1
         save_file(tensors, dst / f.name, metadata={"format": "pt"})
-    print(f"merged {replaced} weight matrices into {dst}")
     assert replaced > 0, "no LoRA weights matched the checkpoint's tensor names"
+    (dst / "DONE").write_text(str(replaced))
+    print(f"merged {replaced} weight matrices into {dst}")
 
 
 # ── 5. Held-out check ────────────────────────────────────────────────────────
