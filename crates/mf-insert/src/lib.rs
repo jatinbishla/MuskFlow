@@ -21,6 +21,11 @@ pub fn request_permission() -> bool {
     imp::request_permission()
 }
 
+/// Puts `text` on the clipboard (the MuskFlow window's Copy buttons).
+pub fn copy(text: &str) -> Result<()> {
+    imp::copy(text)
+}
+
 /// Inserts `text` at the cursor of the focused app.
 pub fn insert(text: &str) -> Result<()> {
     if text.is_empty() {
@@ -99,6 +104,14 @@ mod imp {
         Ok(())
     }
 
+    pub fn copy(text: &str) -> Result<()> {
+        let pb = NSPasteboard::generalPasteboard();
+        pb.clearContents();
+        // SAFETY: NSPasteboardTypeString is an AppKit constant.
+        pb.setString_forType(&NSString::from_str(text), unsafe { NSPasteboardTypeString });
+        Ok(())
+    }
+
     fn snapshot(pb: &NSPasteboard) -> Snapshot {
         let Some(items) = pb.pasteboardItems() else {
             return Vec::new();
@@ -156,5 +169,9 @@ mod imp {
 
     pub fn insert(_text: &str) -> Result<()> {
         bail!("inserting text is macOS-only for now")
+    }
+
+    pub fn copy(_text: &str) -> Result<()> {
+        bail!("the clipboard is macOS-only for now")
     }
 }

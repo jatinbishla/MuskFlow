@@ -15,6 +15,7 @@ use mf_cleanup::Cleaner;
 use mf_hotkey::{Event, Mode};
 use mf_shell::{State, Ui};
 
+use crate::history::{Entry, History};
 use crate::{
     Common, asr_dir, dictionary, llm_path, load_cleaner, load_engine, load_vad, ms, record,
 };
@@ -42,10 +43,16 @@ pub fn in_app_bundle() -> bool {
 
 /// A double-clicked app has no terminal: send stderr to `~/Library/Logs/MuskFlow.log`.
 pub fn log_to_file() {
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
     let path = home.join("Library/Logs/MuskFlow.log");
     #[cfg(target_os = "macos")]
-    if let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+    if let Ok(file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
         use std::os::fd::AsRawFd;
         // SAFETY: dup2 on two valid descriptors; the file stays open for the process lifetime.
         unsafe { libc::dup2(file.as_raw_fd(), libc::STDERR_FILENO) };
@@ -75,9 +82,18 @@ pub fn run(c: &Common, device: Option<&str>) -> Result<()> {
     }
     c.dictionary = Some(dict_path.clone());
     let device = device.map(String::from);
+    let hub = crate::hub::Hub {
+        history: History::default_path(),
+        dictionary: dict_path.clone(),
+        tier: c.tier,
+    };
     let config = mf_shell::Config {
         dictionary: dict_path,
         tier: c.tier.to_string(),
+        html: include_str!("ui/index.html"),
+        backend: hub.into_backend(),
+        // Double-clicked: show the window, like any app. From a terminal: stay in the menu bar.
+        open_window: in_app_bundle(),
     };
     mf_shell::run(config, move |ui| {
         if let Err(e) = dictate_loop(&c, device.as_deref(), &ui) {
@@ -112,6 +128,7 @@ fn dictate_loop(c: &Common, device: Option<&str>, ui: &Ui) -> Result<()> {
         c.tier,
         dict_path.display()
     );
+    let history = History::new(History::default_path());
     ui.set(State::Ready);
 
     loop {
@@ -209,6 +226,24 @@ fn dictate_loop(c: &Common, device: Option<&str>, ui: &Ui) -> Result<()> {
         // A trailing space so the next dictation doesn't run into this one.
         match mf_insert::insert(&format!("{text} ")) {
             Ok(()) => {
+                let latency = rec.stopped.elapsed();
+                let entry = Entry {
+                    at: History::now_ms(),
+                    text: text.clone(),
+                    raw: raw.clone(),
+                    app: None,
+                    mode: if final_mode == Mode::Command {
+                        "command"
+                    } else {
+                        "dictate"
+                    }
+                    .into(),
+                    spoke_secs: spoke,
+                    latency_ms: latency.as_millis() as u32,
+                };
+                if let Err(e) = history.append(&entry) {
+                    log::warn!("could not save history: {e:#}");
+                }
                 ui.set(State::Typed);
                 eprintln!(
                     "→ typed in {} (speech {} + cleanup {}) · spoke {spoke:.1}s\n  {text}",

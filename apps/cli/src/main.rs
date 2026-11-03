@@ -2,6 +2,8 @@
 
 mod app;
 mod bench;
+mod history;
+mod hub;
 
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
