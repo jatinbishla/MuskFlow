@@ -33,6 +33,7 @@ Add or check tiers any time:
 **Dictate into any app (macOS):** hold **Fn**, speak, let go, and the cleaned text is typed at your cursor.
 
 ```bash
+scripts/make-signing-cert.sh      # once: a local signing certificate, so updates keep their permissions
 scripts/make-app.sh standard      # builds MuskFlow.app and installs it in /Applications
 ```
 

@@ -4,9 +4,10 @@
 #   scripts/make-app.sh [tier]      # lite | standard | max (default: standard)
 #
 # The app uses the models in this checkout's models/ folder (install them with
-# `muskflow models install <tier>`). It is signed ad hoc, so macOS treats every
-# rebuild as a new app: after rebuilding, turn MuskFlow off and on again under
-# Input Monitoring and Accessibility.
+# `muskflow models install <tier>`). It is signed with the "MuskFlow Local Signing"
+# certificate when you have one (scripts/make-signing-cert.sh), so macOS keeps its
+# permissions across rebuilds. Without it the app is signed ad hoc, and every rebuild
+# needs Input Monitoring and Accessibility turned off and on again.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -50,7 +51,14 @@ cat > "$APP/Contents/Info.plist" <<EOF
 </plist>
 EOF
 
-codesign --force --sign - --identifier "$ID" "$APP" >/dev/null
+CERT="MuskFlow Local Signing"
+if security find-certificate -c "$CERT" >/dev/null 2>&1; then
+  codesign --force --sign "$CERT" --identifier "$ID" "$APP" 2>/dev/null
+  echo "Signed with \"$CERT\": permissions carry over between rebuilds."
+else
+  codesign --force --sign - --identifier "$ID" "$APP" 2>/dev/null
+  echo "Signed ad hoc (run scripts/make-signing-cert.sh to keep permissions across rebuilds)."
+fi
 
 DEST=/Applications/MuskFlow.app
 pkill -x MuskFlow 2>/dev/null || true
