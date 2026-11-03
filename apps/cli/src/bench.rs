@@ -15,7 +15,7 @@ use mf_cleanup::Cleaned;
 use mf_eval::{Wer, wer};
 use mf_models::{Tier, dir_size};
 
-use crate::{Common, Replay, llm_path, load_cleaner, load_engine, replay};
+use crate::{Common, Replay, dictionary, llm_path, load_cleaner, load_engine, replay};
 
 struct Clip {
     id: String,
@@ -80,6 +80,7 @@ pub fn run(
         }
     );
 
+    let dict = dictionary(c)?;
     let mut runs = Vec::new();
     for tier in tiers {
         if !tier.asr_path(&c.models).is_dir() {
@@ -110,7 +111,7 @@ pub fn run(
             let rules_wer = clip
                 .clean
                 .as_ref()
-                .map(|reference| wer(reference, &mf_cleanup::rules::clean(&asr.text)));
+                .map(|reference| wer(reference, &mf_cleanup::rules::clean(&dict.apply(&asr.text))));
             let r = ClipResult {
                 asr,
                 asr_wer,

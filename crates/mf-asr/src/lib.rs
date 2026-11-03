@@ -6,12 +6,14 @@
 //! the last few seconds of audio are left to decode.
 
 mod committer;
+mod hotwords;
 mod parakeet;
 mod phrases;
 mod streaming;
 mod whisper;
 
 pub use committer::{Committer, CommitterConfig};
+pub use hotwords::Vocab;
 pub use parakeet::{ParakeetConfig, ParakeetTranscriber};
 pub use phrases::PhraseSession;
 pub use streaming::{StreamingConfig, StreamingParakeet};
@@ -114,6 +116,7 @@ impl Engine {
         num_threads: i32,
         provider: &str,
         hotwords: Vec<String>,
+        hotwords_score: f32,
     ) -> Result<Self> {
         let dir = model_dir.to_string_lossy();
         if dir.contains("streaming") {
@@ -133,6 +136,7 @@ impl Engine {
             cfg.num_threads = num_threads;
             cfg.provider = provider.into();
             cfg.hotwords = !hotwords.is_empty();
+            cfg.hotwords_score = hotwords_score;
             Box::new(ParakeetTranscriber::load(&cfg)?)
         };
         Ok(Self::Offline {

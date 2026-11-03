@@ -47,9 +47,22 @@ Dictate from your mic (speak, then press Enter):
 | `muskflow clean "text"` | runs the cleanup LLM on any text |
 | `muskflow bench --show` | runs every clip through every installed tier and compares accuracy, latency, CPU and size |
 
-Benchmark clips: `./scripts/make-bench-clips.sh` (macOS) synthesises 8 clips with references, and `./scripts/record-passages.sh` records *you* reading 6 passages, so `muskflow bench --clips recordings` tests your real voice.
+### Your dictionary
 
-Tuning flags: `--threads N`, `--step` / `--context` (streaming), `--hotwords a,b,c`, `--asr <model dir>` (override the tier's model).
+Names, products and jargon get spelled your way on every tier. Put one term per line in a text file and pass it with `--dictionary my-words.txt` (or set `MUSKFLOW_DICTIONARY`), or list a few inline with `--hotwords "SubFlo,Jatin,lien waivers"`:
+
+```
+# my-words.txt
+Jatin Bishla
+SubFlo
+lien waivers
+```
+
+The speech model usually *hears* a rare name right and only *spells* it wrong ("Subflow", "firman", "Zirodhaa"), so MuskFlow respells near misses that sound the same, before and after the cleanup LLM. Ordinary words that merely look similar ("former", "subway") are left alone. `--hotword-boost 1.5` additionally biases the Parakeet speech model (Lite, Standard) toward the terms; above ~2 it starts inventing them.
+
+Benchmark clips: `./scripts/make-bench-clips.sh` (macOS) synthesises 11 clips with references, and `./scripts/record-passages.sh` records *you* reading 6 passages, so `muskflow bench --clips recordings` tests your real voice.
+
+Tuning flags: `--threads N`, `--step` / `--context` (streaming), `--asr <model dir>` (override the tier's model).
 
 ## Layout
 

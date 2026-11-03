@@ -6,6 +6,7 @@
 //! dropped too much of what they did, we fall back to the rules-only text.
 //! Trust beats polish.
 
+pub mod dictionary;
 pub mod guard;
 pub mod rules;
 
@@ -14,6 +15,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use mf_llm::{Generation, Llm};
 
+pub use dictionary::Dictionary;
 pub use guard::Verdict;
 
 /// Words that signal a self-correction; their presence sends text to the LLM.
@@ -84,11 +86,21 @@ pub struct Cleaned {
 
 pub struct Cleaner {
     llm: Llm,
+    dictionary: Dictionary,
 }
 
 impl Cleaner {
     pub fn new(llm: Llm) -> Self {
-        Self { llm }
+        Self {
+            llm,
+            dictionary: Dictionary::default(),
+        }
+    }
+
+    /// Respell the user's names and terms before and after the LLM.
+    pub fn with_dictionary(mut self, dictionary: Dictionary) -> Self {
+        self.dictionary = dictionary;
+        self
     }
 
     pub fn llm(&self) -> &Llm {
@@ -97,6 +109,7 @@ impl Cleaner {
 
     pub fn clean(&self, raw: &str) -> Result<Cleaned> {
         let t = Instant::now();
+        let raw = &self.dictionary.apply(raw);
         let ruled = rules::clean(raw);
         if ruled.is_empty() || !needs_llm(raw) {
             return Ok(Cleaned {
@@ -113,7 +126,8 @@ impl Cleaner {
         // Cleanup rarely needs more tokens than the input; cap runaway generations.
         let max_tokens = raw.split_whitespace().count() * 2 + 32;
         let generation = self.llm.complete(&prefix, &suffix, max_tokens)?;
-        let llm_text = generation.text.trim().to_string();
+        // The LLM sometimes "corrects" a name back to a common spelling.
+        let llm_text = self.dictionary.apply(generation.text.trim());
         let verdict = guard::check(raw, &llm_text);
         let (text, path) = if verdict.ok() {
             (llm_text.clone(), Path::Llm)

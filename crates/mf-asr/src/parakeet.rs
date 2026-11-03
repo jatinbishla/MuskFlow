@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, anyhow};
 use sherpa_onnx::{OfflineRecognizer, OfflineRecognizerConfig, OfflineTransducerModelConfig};
 
+use crate::hotwords::Vocab;
 use crate::{Hypothesis, Transcriber, Word};
 
 const SAMPLE_RATE: i32 = 16_000;
@@ -36,7 +37,8 @@ impl ParakeetConfig {
 pub struct ParakeetTranscriber {
     recognizer: OfflineRecognizer,
     name: String,
-    hotwords: bool,
+    /// Set when hotwords are enabled: spells them in the model's own pieces.
+    vocab: Option<Vocab>,
 }
 
 impl ParakeetTranscriber {
@@ -74,7 +76,11 @@ impl ParakeetTranscriber {
         Ok(Self {
             recognizer,
             name: model_name(&cfg.model_dir),
-            hotwords: cfg.hotwords,
+            vocab: if cfg.hotwords {
+                Some(Vocab::load(&cfg.model_dir.join("tokens.txt"))?)
+            } else {
+                None
+            },
         })
     }
 }
@@ -88,12 +94,11 @@ impl Transcriber for ParakeetTranscriber {
         if pcm.is_empty() {
             return Ok(Hypothesis::default());
         }
-        let stream = if self.hotwords && !hotwords.is_empty() {
-            // sherpa-onnx takes one hotword phrase per line.
-            self.recognizer
-                .create_stream_with_hotwords(&hotwords.join("\n"))
-        } else {
-            self.recognizer.create_stream()
+        let stream = match &self.vocab {
+            Some(vocab) if !hotwords.is_empty() => self
+                .recognizer
+                .create_stream_with_hotwords(&vocab.hotword_lines(hotwords)),
+            _ => self.recognizer.create_stream(),
         };
         stream.accept_waveform(SAMPLE_RATE, pcm);
         self.recognizer.decode(&stream);

@@ -1,0 +1,31 @@
+# Names and terms for `muskflow bench --dictionary bench/dictionary.txt`.
+# Some aren't in any clip, to check the dictionary doesn't respell words it shouldn't.
+# People
+Jatin Bishla
+Jatin
+Gaurav
+Priya Raghunathan
+Priyanka
+Siobhan
+Nikhil
+Arjun Mehta
+Sarah
+# Companies and products
+SubFlo
+Anthropic
+Figma
+Zerodha
+Razorpay
+Turner Construction
+Kubernetes
+Terraform
+Postgres
+Redis
+# Construction billing
+foreman
+lien waiver
+lien waivers
+retainage
+schedule of values
+pay application
+general contractor

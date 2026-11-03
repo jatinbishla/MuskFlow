@@ -24,7 +24,7 @@ One-shot (`muskflow transcribe`): Parakeet 0.6B v3 decodes 17 s in ~1.6 s (≈10
 - **Default: Parakeet 0.6B v3 + committer, step 1 s, context 1 s.** Already inside the 350 ms end-to-end budget for the ASR share.
 - Left context is essential for stitching quality; 1 s is enough.
 - 110M is the Lite-tier candidate: 2× faster, but needs the LLM + screen context to fix names.
-- Hotwords (`--hotwords`, beam search) had **no effect** and doubled the decode time. sherpa-onnx likely needs BPE-tokenised hotwords (`modeling_unit=bpe` + `bpe_vocab`). TODO.
+- Hotwords (`--hotwords`, beam search) had **no effect** and doubled the decode time. (Fixed later: see the dictionary section below.)
 - Biggest remaining win: run Parakeet on the Apple Neural Engine / GPU (CoreML fp16 build) instead of int8 on CPU. That would cut CPU use while speaking from 30 % to a few % (battery).
 
 ## 2026-11-03 — live mic (`muskflow listen`, MacBook Air M5, built-in mic)
@@ -111,3 +111,19 @@ Open issues:
 - Qwen3.5 is hybrid (gated delta net), so prompt-lookup speculation is off for Lite/Standard. Speculation for hybrids needs state snapshots per draft.
 - Lite's 0.8B still misses some self-corrections, so it's the first fine-tuning target. Gap to Max: 6.5 pts.
 - No fine-tuning yet: everything above is zero-shot plus examples.
+
+## 2026-11-03: dictionary (names and jargon), all tiers
+
+Full report: [bench/2026-11-03-dictionary-tiers.md](bench/2026-11-03-dictionary-tiers.md). 11 synthetic clips. Three of them are new and name-heavy and were not used for tuning (`names-us`, `names-in`, `jargon-gb`). `bench/dictionary.txt` has 28 terms, including some that appear in no clip.
+
+| Tier | Final WER, no dictionary | **Final WER, with dictionary** | Rules-only, with dictionary |
+|---|---|---|---|
+| Lite | 10.5% | **6.6%** | 9.3% |
+| Standard | 7.2% | **3.6%** | 6.9% |
+| Max | 4.2% | **1.5%** | 4.5% |
+
+- **Decoder hotwords were fixed and are opt-in.** sherpa-onnx rejected whole words for NeMo models, so every hotword was silently dropped. MuskFlow now spells them into the model's own BPE pieces. Even so, a boost of 3/token barely helps, and 6+ makes Parakeet hallucinate the terms. That's why it's `--hotword-boost`, off by default.
+- **Dictionary respelling** does the work, on every tier including Whisper. Examples: Subflow→SubFlo, firman→foreman, Zirodhaa→Zerodha, Garv→Gaurav, Nick Hill→Nikhil, "turn a construction"→Turner Construction.
+- **No regressions** on clips without dictionary terms.
+- **Still missed:** "Siobhan" (heard as "Chavon"/"Shivan"; the Irish spelling doesn't match the sound) and "Razape"→Razorpay on Lite.
+- **Lite still trails Max by 5.1 pts.** Most of the gap is self-corrections in `dictation` and fillers in `fast`, which is the fine-tuning target.

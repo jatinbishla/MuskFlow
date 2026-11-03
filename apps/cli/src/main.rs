@@ -13,7 +13,7 @@ use mf_asr::{CommitterConfig, Engine, SessionStats, Word};
 use mf_audio::{
     MicCapture, SpeechTrimmer, VadConfig, list_inputs, load_wav_16k, samples_to_secs, save_wav_16k,
 };
-use mf_cleanup::Cleaner;
+use mf_cleanup::{Cleaner, Dictionary};
 use mf_llm::{Llm, LlmConfig};
 use mf_models::{Tier, parse_tiers};
 
@@ -53,9 +53,16 @@ pub(crate) struct Common {
     /// Inference provider: cpu or coreml.
     #[arg(long, default_value = "cpu", global = true)]
     provider: String,
-    /// Comma-separated words to bias recognition towards (switches to beam search).
+    /// Comma-separated names and terms to spell your way (added to --dictionary).
     #[arg(long, value_delimiter = ',', global = true)]
     hotwords: Vec<String>,
+    /// Your dictionary: one name or term per line, spelled the way you want it.
+    #[arg(long, env = "MUSKFLOW_DICTIONARY", global = true)]
+    dictionary: Option<PathBuf>,
+    /// Also bias the speech model towards dictionary terms, this much per token
+    /// (Parakeet tiers; beam search). 0 = off. Above ~2 it starts inventing them.
+    #[arg(long, default_value_t = 0.0, global = true)]
+    hotword_boost: f32,
     /// Seconds of new audio between re-decodes while speaking (offline models).
     #[arg(long, default_value_t = 1.0, global = true)]
     step: f32,
@@ -198,6 +205,26 @@ fn asr_dir(c: &Common) -> PathBuf {
     }
 }
 
+/// `--hotwords` plus the `--dictionary` file.
+pub(crate) fn dictionary(c: &Common) -> Result<Dictionary> {
+    let mut terms = c.hotwords.clone();
+    if let Some(path) = &c.dictionary {
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("could not read dictionary {}", path.display()))?;
+        terms.extend(Dictionary::parse(&text).terms().map(String::from));
+    }
+    Ok(Dictionary::new(terms))
+}
+
+/// Terms the speech model itself is biased towards; only with `--hotword-boost`.
+fn asr_hotwords(c: &Common) -> Result<Vec<String>> {
+    Ok(if c.hotword_boost > 0.0 {
+        dictionary(c)?.terms().map(String::from).collect()
+    } else {
+        Vec::new()
+    })
+}
+
 pub(crate) fn load_cleaner(c: &Common, path: &Path) -> Result<Cleaner> {
     let t = Instant::now();
     let cfg = LlmConfig {
@@ -216,7 +243,7 @@ pub(crate) fn load_cleaner(c: &Common, path: &Path) -> Result<Cleaner> {
             ""
         }
     );
-    let cleaner = Cleaner::new(llm);
+    let cleaner = Cleaner::new(llm).with_dictionary(dictionary(c)?);
     cleaner.clean("um warm up the the model")?; // first call pays for Metal shader compilation
     Ok(cleaner)
 }
@@ -288,9 +315,15 @@ pub(crate) fn load_engine(c: &Common, dir: &Path) -> Result<Engine> {
         context_secs: c.context,
         ..Default::default()
     };
-    let engine = Engine::load(dir, threads(c), &c.provider, c.hotwords.clone())?
-        .with_committer(committer)
-        .with_vad(&c.models.join("silero_vad.onnx"))?;
+    let engine = Engine::load(
+        dir,
+        threads(c),
+        &c.provider,
+        asr_hotwords(c)?,
+        c.hotword_boost,
+    )?
+    .with_committer(committer)
+    .with_vad(&c.models.join("silero_vad.onnx"))?;
     engine.warm_up()?;
     eprintln!("· loaded {} in {}", engine.name(), ms(t.elapsed()));
     Ok(engine)
@@ -319,12 +352,13 @@ fn transcribe(c: &Common, wav: &Path, no_vad: bool) -> Result<()> {
     }
 
     // One warm-up decode so the timing reflects steady state, not first-call allocation.
-    asr.transcribe(&speech[..speech.len().min(16_000)], &c.hotwords)?;
+    let hotwords = asr_hotwords(c)?;
+    asr.transcribe(&speech[..speech.len().min(16_000)], &hotwords)?;
     let t = Instant::now();
-    let hyp = asr.transcribe(speech, &c.hotwords)?;
+    let hyp = asr.transcribe(speech, &hotwords)?;
     let dt = t.elapsed();
 
-    println!("{}", hyp.text());
+    println!("{}", dictionary(c)?.apply(&hyp.text()));
     let audio = samples_to_secs(pcm.len());
     eprintln!(
         "· audio {:.2}s → speech {:.2}s · vad {} · decode {} · {:.0}× real time",
@@ -341,7 +375,7 @@ fn stream(c: &Common, wav: &Path, fast: bool) -> Result<()> {
     let engine = load_engine(c, &asr_dir(c))?;
     let pcm = load_wav_16k(wav)?;
     let r = replay(&engine, &pcm, fast, true)?;
-    println!("\n\n{}", r.text);
+    println!("\n\n{}", dictionary(c)?.apply(&r.text));
     eprintln!(
         "· audio {:.2}s · {} decodes ({} total, {:.0}% of audio time) · tail {:.2}s in {} · key-up → text {}",
         samples_to_secs(pcm.len()),
@@ -459,7 +493,7 @@ fn listen(c: &Common, device: Option<&str>, save: Option<&Path>) -> Result<()> {
             eprintln!("· no speech detected (mic peak {peak_db:.0} dBFS)");
             return Ok(());
         }
-        println!("\n{}", hyp.text());
+        println!("\n{}", dictionary(c)?.apply(&hyp.text()));
         eprintln!(
             "· spoke {:.2}s · {} decodes · tail {:.2}s in {} · Enter → text {}",
             samples_to_secs(all.len()),
