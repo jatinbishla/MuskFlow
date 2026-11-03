@@ -151,6 +151,9 @@ enum Cmd {
         /// The compact prompt MuskFlow's fine-tuned models use.
         #[arg(long)]
         compact: bool,
+        /// clean, formal, casual or prompt.
+        #[arg(long, default_value = "clean")]
+        style: mf_cleanup::Style,
     },
 }
 
@@ -210,9 +213,13 @@ fn main() -> Result<()> {
             out.as_deref(),
         ),
         Cmd::Clean { text, style } => clean(&cli.common, text.as_deref(), *style),
-        Cmd::Prompt { text, compact } => {
+        Cmd::Prompt {
+            text,
+            compact,
+            style,
+        } => {
             let (prefix, suffix) = if *compact {
-                mf_cleanup::build_compact_prompt(text)
+                mf_cleanup::build_compact_prompt(text, *style)
             } else {
                 mf_cleanup::build_prompt(text)
             };

@@ -158,7 +158,18 @@ pub fn check(raw: &str, cleaned: &str) -> Verdict {
 /// Rewriting styles (formal, AI prompt) may rephrase, so word-for-word overlap is
 /// too strict. What they must never do is invent facts or answer instead of rewrite:
 /// no names or numbers the speaker didn't say, and most of what they said survives.
-pub fn check_rewrite(raw: &str, rewritten: &str) -> Verdict {
+/// How freely a rewrite may reword.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Rewrite {
+    /// Formal: rephrased sentences, but mostly the speaker's words.
+    Polish,
+    /// AI prompt: a restatement in new words is the point, so word overlap means little.
+    /// What must hold: no invented names or numbers, no dropped names, no answering,
+    /// and no longer than what was said.
+    Restate,
+}
+
+pub fn check_rewrite(raw: &str, rewritten: &str, kind: Rewrite) -> Verdict {
     let all_input = mf_eval::normalize(raw);
     let input: HashSet<String> = content(raw).into_iter().collect();
     // List markers would otherwise count as the words "one", "two", "three".
@@ -223,10 +234,17 @@ pub fn check_rewrite(raw: &str, rewritten: &str) -> Verdict {
         Some("added names or numbers the speaker didn't say")
     } else if !dropped.is_empty() {
         Some("dropped a name the speaker said")
-    } else if new_words > 2 && new_words as f32 > MAX_ADDED_SHARE_REWRITE * output.len() as f32 {
+    } else if rewritten.contains("```") || rewritten.contains("**") {
+        Some("formatted like an answer, not a rewrite")
+    } else if kind == Rewrite::Polish
+        && new_words > 2
+        && new_words as f32 > MAX_ADDED_SHARE_REWRITE * output.len() as f32
+    {
         Some("added too much the speaker didn't say")
-    } else if kept < MIN_KEPT_SHARE_REWRITE {
+    } else if kind == Rewrite::Polish && kept < MIN_KEPT_SHARE_REWRITE {
         Some("dropped too much of what was said")
+    } else if kind == Rewrite::Restate && output.len() > input.len() + input.len() / 3 + 4 {
+        Some("longer than what was said (answered instead of rewrote?)")
     } else if output.len() > 3 * input.len().max(4) {
         Some("much longer than what was said (answered instead of rewrote?)")
     } else {
@@ -258,13 +276,87 @@ fn names(text: &str) -> Vec<String> {
         .filter(|(i, _)| *i > 0 && !words[i - 1].ends_with(['.', '?', '!']))
         .map(|(_, w)| w.trim_matches(|c: char| !c.is_alphanumeric()))
         .filter(|w| {
+            let lower = w.to_lowercase();
             w.len() > 1
                 && w.chars().next().is_some_and(char::is_uppercase)
-                && !matches!(*w, "I" | "I'm" | "I'll" | "I've" | "I'd" | "OK" | "Okay")
+                // Speech models capitalise ordinary words mid-sentence ("task Can you…").
+                && !FUNCTION_WORDS.contains(&lower.as_str())
+                && !COMMON_WORDS.contains(&lower.as_str())
         })
         .map(String::from)
         .collect()
 }
+
+/// Everyday words a speech model may capitalise that are never names.
+const COMMON_WORDS: &[&str] = &[
+    "i",
+    "i'm",
+    "i'll",
+    "i've",
+    "i'd",
+    "ok",
+    "okay",
+    "yes",
+    "yeah",
+    "no",
+    "not",
+    "now",
+    "then",
+    "please",
+    "thanks",
+    "thank",
+    "hey",
+    "hi",
+    "hello",
+    "what",
+    "how",
+    "why",
+    "when",
+    "where",
+    "who",
+    "which",
+    "should",
+    "shall",
+    "may",
+    "might",
+    "must",
+    "let's",
+    "let",
+    "there",
+    "here",
+    "they",
+    "he",
+    "she",
+    "his",
+    "her",
+    "their",
+    "them",
+    "us",
+    "if",
+    "as",
+    "all",
+    "some",
+    "any",
+    "every",
+    "one",
+    "first",
+    "second",
+    "third",
+    "next",
+    "last",
+    "maybe",
+    "well",
+    "actually",
+    "basically",
+    "right",
+    "sure",
+    "great",
+    "good",
+    "also",
+    "after",
+    "before",
+    "because",
+];
 
 /// Whether the speaker said `word`, allowing for "$12,400" vs "twelve thousand four hundred".
 fn mentions(raw_lower: &str, normalized_raw: &[String], word: &str) -> bool {
@@ -287,29 +379,43 @@ mod tests {
     fn rewrites_may_rephrase_but_not_invent() {
         let raw = "um so can you like help me write a function in python that takes a list of numbers and returns the average but ignore none values";
         let ok = "Write a Python function that takes a list of numbers and returns the average, ignoring None values.";
-        assert!(check_rewrite(raw, ok).ok(), "{:?}", check_rewrite(raw, ok));
+        assert!(
+            check_rewrite(raw, ok, Rewrite::Restate).ok(),
+            "{:?}",
+            check_rewrite(raw, ok, Rewrite::Restate)
+        );
         let invented = "Write a Python function for Stripe that returns the average of 10 numbers.";
-        assert!(!check_rewrite(raw, invented).ok());
+        assert!(!check_rewrite(raw, invented, Rewrite::Restate).ok());
         let answered = "def average(nums):\n    vals = [n for n in nums if n is not None]\n    return sum(vals) / len(vals) if vals else 0.0\n\nThis function filters out None values, then divides the sum by the count, returning zero for an empty list so it never divides by zero, which is a common bug.";
-        assert!(!check_rewrite(raw, answered).ok());
+        assert!(!check_rewrite(raw, answered, Rewrite::Restate).ok());
         let money = check_rewrite(
             "the invoice is twelve thousand four hundred dollars",
             "The invoice is $12,400.",
+            Rewrite::Polish,
         );
         assert!(money.ok(), "{money:?}");
         let list = check_rewrite(
             "do the following first create a app second make it secure and third make it fast",
             "Do the following:\n1. Create an app.\n2. Make it secure.\n3. Make it fast.",
+            Rewrite::Restate,
         );
         assert!(list.ok(), "{list:?}");
         let lost_name = check_rewrite(
             "hey um Sarah did you get the invoice I sent on Monday",
             "Hey, did you get the invoice I sent on Monday?",
+            Rewrite::Polish,
         );
         assert_eq!(lost_name.reason, Some("dropped a name the speaker said"));
+        let capitalised = check_rewrite(
+            "now let's move to the next task Can you list what is left But only for the app",
+            "List the remaining tasks for the app.",
+            Rewrite::Restate,
+        );
+        assert!(capitalised.ok(), "{capitalised:?}");
         let padded = check_rewrite(
             "Sarah did you get the invoice",
             "Hi Sarah, I hope you're doing well and having a wonderful week. Did you get the invoice?",
+            Rewrite::Polish,
         );
         assert!(!padded.ok());
     }

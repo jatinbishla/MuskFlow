@@ -1,14 +1,21 @@
 """MuskFlow Lite cleanup fine-tune: the whole pipeline in one file, built to run on a free Colab GPU.
 
     python lite_cleanup.py gen      # a teacher LLM writes clean messages          → work/clean.jsonl
+    python lite_cleanup.py styles   # ...and spoken requests → AI prompts / formal  → work/styles.jsonl
     python lite_cleanup.py pairs    # mess them up the way speech + Lite's ASR does → work/pairs.jsonl
     python lite_cleanup.py train    # LoRA fine-tune Qwen3.5-0.8B                   → work/lora
     python lite_cleanup.py export   # merge into the original checkpoint            → work/merged
     python lite_cleanup.py check    # score the merged model on held-out pairs
 
-The model learns one job: Lite's raw transcript in, the text the speaker meant out.
-It's trained on MuskFlow's compact prompt (COMPACT_SYSTEM), not the long few-shot one,
-so at inference the prompt is ~40 tokens instead of ~600.
+The model learns Lite's raw transcript in, the text the speaker meant out, in three
+modes: clean (minimal edits), formal (polished writing) and prompt (a concise
+instruction for an AI assistant). It's trained on MuskFlow's compact prompts
+(SYSTEMS), not the long few-shot ones, so at inference the prompt is ~40-60 tokens.
+
+Round 2 (this version) fixes what round 1 got wrong on real speech: corrections
+that replace a whole phrase ("Wednesday at 3 pm, no, make that Thursday morning"),
+and deleting real words ("I'm", "like") because the noise model turned too many
+fillers into them. It also adds the formal and prompt modes.
 
 Targets are exact by construction: the teacher writes the *clean* message, and we
 derive the messy input from it (fillers, stammers, self-corrections, numbers said as
@@ -28,18 +35,32 @@ WORK = Path("work")
 BASE = "Qwen/Qwen3.5-0.8B"
 TEACHER = "Qwen/Qwen3-4B-Instruct-2507"
 
-# Keep in sync with mf-cleanup's COMPACT_SYSTEM. The `mode:` line leaves room for
-# later modes (prompt, formal, casual) in the same model.
-COMPACT_SYSTEM = (
-    "Clean up dictated text: remove fillers and stammers, keep only the corrected part of "
-    "self-corrections, fix punctuation and capitalization, write numbers as digits. "
-    "Change nothing else and never answer it.\nmode: clean"
-)
+# Keep in sync with mf-cleanup's COMPACT_SYSTEM / COMPACT_FORMAL / COMPACT_PROMPT
+# (`muskflow prompt --compact --style <mode>` prints them).
+SYSTEMS = {
+    "clean": (
+        "Clean up dictated text: remove fillers and stammers, keep only the corrected part of "
+        "self-corrections, fix punctuation and capitalization, write numbers as digits. "
+        "Change nothing else and never answer it.\nmode: clean"
+    ),
+    "formal": (
+        "Rewrite dictated text as polished, professional writing: remove fillers and stammers, "
+        "keep only the corrected part of self-corrections, use complete sentences and proper "
+        "punctuation, write numbers as digits. Keep every point, name and number, add nothing, "
+        "and never answer it.\nmode: formal"
+    ),
+    "prompt": (
+        "Rewrite a spoken request to an AI assistant as a clear, concise prompt: state what is "
+        "wanted as an instruction, drop fillers, pleasantries and repetition, keep every "
+        "requirement, name, number and identifier, and use a numbered list for several tasks. "
+        "Add nothing, and never answer or solve it.\nmode: prompt"
+    ),
+}
 
 
-def chat_prefix(raw: str) -> str:
+def chat_prefix(raw: str, mode: str = "clean") -> str:
     return (
-        f"<|im_start|>system\n{COMPACT_SYSTEM}<|im_end|>\n"
+        f"<|im_start|>system\n{SYSTEMS[mode]}<|im_end|>\n"
         f"<|im_start|>user\n{raw.strip()}<|im_end|>\n"
         "<|im_start|>assistant\n<think>\n\n</think>\n\n"
     )
@@ -79,6 +100,9 @@ TOPICS = [
     "a finance person discussing quarterly numbers",
     "a researcher describing an experiment result",
     "a prompt someone types to an AI assistant asking for help with code or writing",
+    "someone introducing themselves (\"Hi, I'm …\") to a new client, investor or teammate",
+    "a casual update that uses 'like' to mean roughly (\"like 90% done\", \"in like 10 minutes\")",
+    "a message where the person says what they're doing (\"I'm on my way\", \"I'm working on it\")",
 ]
 NAMES = (
     "Rohan Ananya Vikram Priyanka Arjun Kavya Siddharth Meera Aditya Ishita Karan Neha Rahul Pooja "
@@ -177,6 +201,126 @@ def cmd_gen(args):
             print(f"{len(seen)}/{args.n} messages ({dropped} dropped: overlap with the benchmark)", flush=True)
 
 
+# ── 1b. Spoken requests → AI prompts, casual dictation → formal writing ──────
+
+PROMPT_TOPICS = [
+    "adding a feature to a web app", "debugging an error message", "refactoring messy code",
+    "writing a SQL query", "a shell command they need", "asking an AI to write an email for them",
+    "summarizing a long document", "researching a topic and comparing options",
+    "analysing a spreadsheet of sales data", "writing marketing copy for a product launch",
+    "planning a trip itinerary", "explaining a concept they're learning",
+    "writing product requirements for a new screen", "giving a coding agent several tasks at once",
+    "asking what's left to do on their project and what to work on next",
+    "reviewing a pull request", "setting up a deployment or CI pipeline",
+    "designing a database schema", "rewriting a paragraph to sound better",
+    "preparing for a job interview", "translating a message", "fixing a failing test",
+]
+FORMAL_TOPICS = [
+    "an email to a client about a delayed delivery", "an update to a manager on a project",
+    "a Teams message asking a colleague for a file", "following up with a vendor about a payment",
+    "scheduling an interview with a candidate", "a LinkedIn message to a recruiter",
+    "a meeting recap with action items", "asking for approval on a budget",
+    "a subcontractor emailing a general contractor about a pay application or lien waiver",
+    "declining a meeting politely and proposing another time", "an email to a landlord about a repair",
+]
+
+STYLE_GEN = {
+    "prompt": """Write {k} examples of someone speaking a request to an AI assistant (like ChatGPT, Claude or a coding agent) out loud, and the clear prompt they meant. Theme: {topic}.
+For each example:
+- "spoken": what they actually say out loud: natural, rambling speech with thinking out loud, pleasantries ("can you", "I was wondering", "so basically"), some repetition, and sometimes a change of mind. No filler sounds like um or uh. 20 to 90 words. Write numbers with digits. Names you may use: {names}.
+- "out": the same request as a clear, concise instruction to the AI. Keep every requirement, constraint, name, number, file name and code identifier they said. Use a short intro line and a numbered list only when there are several separate tasks. Do not add anything they didn't ask for. Do not answer the request or write code.
+Output one JSON object per line, exactly like {{"spoken": "...", "out": "..."}}, and nothing else.""",
+    "formal": """Write {k} examples of someone dictating a work message out loud, and the polished version they would send. Theme: {topic}.
+For each example:
+- "spoken": casual, run-on speech as they would say it: loose grammar, repetition, "so basically", and sometimes a self-correction ("Tuesday, no, Wednesday"). No filler sounds like um or uh. 20 to 80 words. Write numbers with digits. Names you may use: {names}.
+- "out": the same message as polished, professional writing: complete sentences, proper punctuation, short paragraphs if it is long. Keep every point, name, number and date, in order; after a self-correction keep only the corrected value. Do not add greetings, sign-offs, facts or promises they didn't say.
+Output one JSON object per line, exactly like {{"spoken": "...", "out": "..."}}, and nothing else.""",
+}
+
+COMMON = set("""i i'm i'll i've i'd ok okay yes yeah no not now then please thanks thank hey hi hello what how why when where who which
+should shall may might must let's let there here they he she his her their them us if as all some any every one first second third
+next last maybe well actually also after before because the a an and or but so to of in on at for with by from is are was were be it
+its this that we you me my our your can could would will do does just write create add make fix find list use check send keep include
+explain summarize compare draft review update set build give show tell help run test""".split())
+
+
+def names_in(text: str) -> set:
+    words = text.split()
+    out = set()
+    for i, w in enumerate(words):
+        core = w.strip(".,!?:;()\"'")
+        if i == 0 or words[i - 1][-1:] in ".?!:" or re.match(r"^\d+[.)]$", words[i - 1]):
+            continue
+        if len(core) > 1 and core[0].isupper() and core.lower() not in COMMON:
+            out.add(core.lower())
+    return out
+
+
+def faithful(spoken: str, out: str) -> bool:
+    """The rewrite keeps to what was said: no names or numbers that weren't spoken,
+    every spoken name kept, no answer-like formatting, not much longer."""
+    s, o = spoken.lower(), out.lower()
+    if "```" in out or "**" in out or len(out.split()) > 1.2 * len(spoken.split()) + 5:
+        return False
+    nums = lambda t: set(re.findall(r"\d[\d,.:]*\d|\d", t.replace(",", "")))
+    if not nums(o) <= nums(s):
+        return False
+    if any(n not in s for n in names_in(out)):
+        return False
+    return all(n in o for n in names_in(spoken))
+
+
+def cmd_styles(args):
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    out = WORK / "styles.jsonl"
+    rows = [json.loads(l) for l in out.read_text().splitlines()] if out.exists() else []
+    want = {"prompt": args.n_prompt, "formal": args.n_formal}
+    have = {m: sum(r["mode"] == m for r in rows) for m in want}
+    if all(have[m] >= want[m] for m in want):
+        print(f"{have} style pairs already written")
+        return
+    random.seed(args.seed + len(rows))
+    grams = held_out_ngrams(Path(args.heldout))
+    tok = AutoTokenizer.from_pretrained(TEACHER, padding_side="left")
+    model = AutoModelForCausalLM.from_pretrained(TEACHER, dtype=torch.float16, device_map="cuda")
+    seen = {r["spoken"] for r in rows}
+    rejected = 0
+    with out.open("a") as f:
+        while any(have[m] < want[m] for m in want):
+            modes = [m for m in want if have[m] < want[m]]
+            batch = [random.choice(modes) for _ in range(args.batch)]
+            prompts = [
+                tok.apply_chat_template(
+                    [{"role": "user", "content": STYLE_GEN[m].format(
+                        k=3, topic=random.choice(PROMPT_TOPICS if m == "prompt" else FORMAL_TOPICS),
+                        names=", ".join(random.sample(NAMES, 4)))}],
+                    tokenize=False, add_generation_prompt=True)
+                for m in batch
+            ]
+            enc = tok(prompts, return_tensors="pt", padding=True).to("cuda")
+            with torch.no_grad():
+                gen = model.generate(**enc, max_new_tokens=900, do_sample=True, temperature=0.85, top_p=0.95)
+            for mode, text in zip(batch, tok.batch_decode(gen[:, enc.input_ids.shape[1]:], skip_special_tokens=True)):
+                for line in text.splitlines():
+                    try:
+                        r = json.loads(line.strip())
+                        spoken, target = r["spoken"].strip().replace("’", "'"), r["out"].strip().replace("’", "'")
+                    except (ValueError, KeyError, TypeError, AttributeError):
+                        continue
+                    if spoken in seen or not 8 <= len(spoken.split()) <= 120 or leaks(spoken, grams):
+                        continue
+                    if not faithful(spoken, target):
+                        rejected += 1
+                        continue
+                    seen.add(spoken)
+                    have[mode] += 1
+                    f.write(json.dumps({"mode": mode, "spoken": spoken, "out": target}) + "\n")
+            f.flush()
+            print(f"{have} (rejected {rejected} unfaithful)", flush=True)
+
+
 # ── 2. Messy speech, as Lite's ASR would transcribe it ───────────────────────
 
 FILLERS = ["um", "uh", "uh", "um", "er", "ah", "hmm"]
@@ -218,6 +362,11 @@ def distractor(v: str) -> str:
     return v[:m.start()] + s + v[m.end():]
 
 
+def sentences(text: str) -> list:
+    """Splits into sentences, without breaking "9.6%" or "$4.50" at the decimal point."""
+    return re.findall(r"(?:[^.?!]|(?<=\d)\.(?=\d))+[.?!]*\s*", text)
+
+
 def add_correction(text: str):
     slots = list(SLOT.finditer(text))
     if not slots:
@@ -230,7 +379,7 @@ def add_correction(text: str):
     if style < 0.5:  # "Thursday, no wait, Friday"
         return text[:m.start()] + f"{wrong}, {random.choice(INLINE_CUES)}, {v}" + text[m.end():]
     pos = 0
-    for s in re.findall(r"[^.?!]+[.?!]*\s*", text):
+    for s in sentences(text):
         if pos <= m.start() < pos + len(s):
             said = s[:m.start() - pos] + wrong + s[m.end() - pos:]
             if style < 0.8:  # "...Wednesday. No, actually, make that Thursday."
@@ -238,6 +387,45 @@ def add_correction(text: str):
             else:  # "We ship Friday. Scratch that. We ship Monday."
                 new = said.rstrip() + " " + random.choice(RESTART) + " " + s
             return text[:pos] + new + text[pos + len(s):]
+        pos += len(s)
+    return None
+
+
+PARTS = ["morning", "afternoon", "evening", "night"]
+PHRASE = re.compile(
+    r"\b(?:" + "|".join(WEEKDAYS + ["today", "tomorrow"]) + r")"
+    r"(?: (?:" + "|".join(PARTS) + r"))?"
+    r"(?: at \d{1,2}(?::\d{2})? ?(?:am|pm|AM|PM))?"
+)
+
+
+def other_phrase(phrase: str) -> str:
+    """A different day/time phrase, often with a different shape ("Wednesday at 3 pm" vs
+    "Thursday morning"), so the model learns a correction replaces the whole phrase."""
+    for _ in range(10):
+        day = random.choice(WEEKDAYS + ["tomorrow", "today"])
+        tail = random.choice(["", " " + random.choice(PARTS),
+                              f" at {random.randint(1, 12)}{random.choice(['', ':30'])} {random.choice(['am', 'pm'])}"])
+        if (day + tail).lower() != phrase.lower():
+            return day + tail
+    return phrase
+
+
+def add_phrase_correction(text: str):
+    """Corrects a whole day/time phrase, as in "Wednesday at 3 pm. No, actually, make that
+    Thursday morning." Returns None if the text has no such phrase."""
+    phrases = [m for m in PHRASE.finditer(text) if m.group()]
+    if not phrases:
+        return None
+    m = random.choice(phrases)
+    v, wrong = m.group(), other_phrase(m.group())
+    if random.random() < 0.5:
+        return text[:m.start()] + f"{wrong}, {random.choice(INLINE_CUES)}, {v}" + text[m.end():]
+    pos = 0
+    for s in sentences(text):
+        if pos <= m.start() < pos + len(s):
+            said = s[:m.start() - pos] + wrong + s[m.end() - pos:]
+            return text[:pos] + said.rstrip() + " " + random.choice(MAKE_THAT).format(v=v) + " " + text[pos + len(s):]
         pos += len(s)
     return None
 
@@ -297,7 +485,9 @@ def asr_noise(spoken: str) -> str:
             r = random.random()
             if r < 0.15:
                 continue  # dropped
-            word = random.choice(MISHEARD[core]) if r < 0.65 else core
+            # Round 1 misheard 50% of fillers as real words ("I'm", "and"), and the model
+            # learned to delete real ones. Now 25%; the rest stay recognisable fillers.
+            word = random.choice(MISHEARD[core]) if r < 0.40 else core
             out.append(word + random.choice([trail, "", ",", "."]))
             continue
         body = w.rstrip(",.?!")
@@ -326,7 +516,11 @@ def asr_noise(spoken: str) -> str:
 def cmd_pairs(args):
     random.seed(args.seed)
     cleans = [json.loads(l)["text"] for l in (WORK / "clean.jsonl").read_text().splitlines() if l.strip()]
-    n = 0
+    if args.clean_limit and len(cleans) > args.clean_limit:
+        cleans = random.sample(cleans, args.clean_limit)
+    styles_file = WORK / "styles.jsonl"
+    styles = [json.loads(l) for l in styles_file.read_text().splitlines()] if styles_file.exists() else []
+    counts = {"clean": 0, "formal": 0, "prompt": 0}
     with (WORK / "pairs.jsonl").open("w") as f:
         for clean in cleans:
             for k in range(args.versions):
@@ -334,14 +528,23 @@ def cmd_pairs(args):
                     heard = clean  # already clean: leave it alone
                 else:
                     spoken = clean
-                    if random.random() < 0.45:
+                    r = random.random()
+                    if r < 0.25:
+                        spoken = add_phrase_correction(spoken) or add_correction(spoken) or spoken
+                    elif r < 0.45:
                         spoken = add_correction(spoken) or spoken
                     if random.random() < 0.85:
                         spoken = add_disfluencies(spoken)
                     heard = asr_noise(spoken)
-                f.write(json.dumps({"input": heard, "target": clean}) + "\n")
-                n += 1
-    print(f"{n} pairs from {len(cleans)} messages")
+                f.write(json.dumps({"mode": "clean", "input": heard, "target": clean}) + "\n")
+                counts["clean"] += 1
+        for row in styles:
+            spoken = row["spoken"]
+            if random.random() < 0.85:
+                spoken = add_disfluencies(spoken)
+            f.write(json.dumps({"mode": row["mode"], "input": asr_noise(spoken), "target": row["out"]}) + "\n")
+            counts[row["mode"]] += 1
+    print(f"pairs: {counts}")
 
 
 # ── 3. LoRA fine-tune ────────────────────────────────────────────────────────
@@ -379,7 +582,7 @@ def cmd_train(args):
     tok = AutoTokenizer.from_pretrained(BASE)
 
     def encode(p):
-        prompt = tok(chat_prefix(p["input"]), add_special_tokens=False).input_ids
+        prompt = tok(chat_prefix(p["input"], p.get("mode", "clean")), add_special_tokens=False).input_ids
         answer = tok(p["target"] + "<|im_end|>", add_special_tokens=False).input_ids
         return prompt + answer, len(prompt)
 
@@ -527,9 +730,10 @@ def cmd_check(args):
     model = AutoModelForImageTextToText.from_pretrained(str(WORK / "merged"), dtype=torch.float16, device_map="cuda").eval()
     test = [json.loads(l) for l in (WORK / "test.jsonl").read_text().splitlines()][: args.n]
     errs, words, exact = 0.0, 0, 0
+    by_mode = {}
     for i in range(0, len(test), 16):
         chunk = test[i:i + 16]
-        enc = tok([chat_prefix(p["input"]) for p in chunk], return_tensors="pt", padding=True, add_special_tokens=False).to("cuda")
+        enc = tok([chat_prefix(p["input"], p.get("mode", "clean")) for p in chunk], return_tensors="pt", padding=True, add_special_tokens=False).to("cuda")
         with torch.no_grad():
             gen = model.generate(**enc, max_new_tokens=160, do_sample=False)
         for p, out in zip(chunk, tok.batch_decode(gen[:, enc.input_ids.shape[1]:], skip_special_tokens=True)):
@@ -538,14 +742,23 @@ def cmd_check(args):
             errs += wer(p["target"], out) * n
             words += n
             exact += out == p["target"]
-            if i == 0:
-                print(f"  in : {p['input']}\n  out: {out}\n  ref: {p['target']}\n")
+            m = by_mode.setdefault(p.get("mode", "clean"), {"errs": 0.0, "words": 0, "n": 0, "faithful": 0, "shown": 0})
+            m["errs"] += wer(p["target"], out) * n
+            m["words"] += n
+            m["n"] += 1
+            m["faithful"] += faithful(p["input"], out)
+            if m["shown"] < 3:
+                m["shown"] += 1
+                print(f"  [{p.get('mode', 'clean')}]\n  in : {p['input']}\n  out: {out}\n  ref: {p['target']}\n")
     print(f"held-out: WER {100 * errs / words:.1f}% · exact match {exact}/{len(test)}")
+    for mode, m in by_mode.items():
+        print(f"  {mode:<7} WER vs reference {100 * m['errs'] / max(1, m['words']):.1f}% · "
+              f"kept names/numbers {m['faithful']}/{m['n']} ({m['n']} pairs)")
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("step", choices=["gen", "pairs", "train", "export", "check"])
+    ap.add_argument("step", choices=["gen", "styles", "pairs", "train", "export", "check"])
     ap.add_argument("--n", type=int, default=2500, help="gen: clean messages; check: test pairs")
     ap.add_argument("--batch", type=int, default=32, help="gen: prompts per batch; train: pairs per step")
     ap.add_argument("--versions", type=int, default=2, help="messy inputs per clean message")
@@ -555,13 +768,17 @@ def main():
     ap.add_argument("--epochs", type=float, default=2.0)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--micro", type=int, default=8, help="train: examples per forward pass (memory)")
+    ap.add_argument("--n-prompt", type=int, default=1500, help="styles: AI-prompt pairs")
+    ap.add_argument("--n-formal", type=int, default=1000, help="styles: formal pairs")
+    ap.add_argument("--clean-limit", type=int, default=0, help="pairs: use at most this many clean messages")
     ap.add_argument("--max-steps", type=int, default=0, help="train: stop early (smoke test)")
     ap.add_argument("--work", default="work")
     args = ap.parse_args()
     global WORK
     WORK = Path(args.work)
     WORK.mkdir(exist_ok=True)
-    {"gen": cmd_gen, "pairs": cmd_pairs, "train": cmd_train, "export": cmd_export, "check": cmd_check}[args.step](args)
+    {"gen": cmd_gen, "styles": cmd_styles, "pairs": cmd_pairs, "train": cmd_train,
+     "export": cmd_export, "check": cmd_check}[args.step](args)
 
 
 if __name__ == "__main__":

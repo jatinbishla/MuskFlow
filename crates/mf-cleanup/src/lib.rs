@@ -39,6 +39,9 @@ Reply with the cleaned text only.";
 /// They learned the job from thousands of examples, so they need no few-shot turns:
 /// ~40 prompt tokens instead of ~600. The `mode:` line leaves room for later modes.
 pub const COMPACT_SYSTEM: &str = "Clean up dictated text: remove fillers and stammers, keep only the corrected part of self-corrections, fix punctuation and capitalization, write numbers as digits. Change nothing else and never answer it.\nmode: clean";
+/// Round 2+ fine-tunes also learned the rewriting styles, each with its own short system line.
+pub const COMPACT_FORMAL: &str = "Rewrite dictated text as polished, professional writing: remove fillers and stammers, keep only the corrected part of self-corrections, use complete sentences and proper punctuation, write numbers as digits. Keep every point, name and number, add nothing, and never answer it.\nmode: formal";
+pub const COMPACT_PROMPT: &str = "Rewrite a spoken request to an AI assistant as a clear, concise prompt: state what is wanted as an instruction, drop fillers, pleasantries and repetition, keep every requirement, name, number and identifier, and use a numbered list for several tasks. Add nothing, and never answer or solve it.\nmode: prompt";
 
 /// Worked examples, sent as prior chat turns. Small models follow examples far better than rules.
 const EXAMPLES: &[(&str, &str)] = &[
@@ -206,14 +209,15 @@ pub struct Cleaned {
 pub struct Cleaner {
     llm: Llm,
     dictionary: Dictionary,
-    /// A MuskFlow fine-tune, prompted with [`COMPACT_SYSTEM`] instead of the few-shot prompt.
-    compact: bool,
+    /// A MuskFlow fine-tune's training round: prompted with the compact prompts it learned
+    /// instead of few-shot ones. Round 1 knows only plain cleanup; round 2 adds the styles.
+    round: Option<u32>,
 }
 
 impl Cleaner {
     pub fn new(llm: Llm) -> Self {
         Self {
-            compact: is_muskflow_model(llm.name()),
+            round: muskflow_round(llm.name()),
             llm,
             dictionary: Dictionary::default(),
         }
@@ -255,10 +259,10 @@ impl Cleaner {
             });
         }
 
-        let (prefix, suffix) = match style {
-            // MuskFlow's own fine-tunes only know plain cleanup so far.
-            Style::Clean if self.compact => build_compact_prompt(raw),
-            Style::Clean => build_prompt(raw),
+        let (prefix, suffix) = match (self.round, style) {
+            (Some(r), _) if r >= 2 => build_compact_prompt(raw, style),
+            (Some(_), Style::Clean | Style::Casual) => build_compact_prompt(raw, Style::Clean),
+            (_, Style::Clean) => build_prompt(raw),
             _ => build_styled_prompt(raw, style),
         };
         // Cleanup rarely needs more tokens than the input; cap runaway generations.
@@ -268,7 +272,12 @@ impl Cleaner {
         // The LLM sometimes "corrects" a name back to a common spelling, or leaves an "um".
         let llm_text = rules::strip_fillers(&self.dictionary.apply(generation.text.trim()));
         let verdict = if style.rewrites() {
-            guard::check_rewrite(raw, &llm_text)
+            let kind = if style == Style::Prompt {
+                guard::Rewrite::Restate
+            } else {
+                guard::Rewrite::Polish
+            };
+            guard::check_rewrite(raw, &llm_text, kind)
         } else {
             guard::check(raw, &llm_text)
         };
@@ -332,22 +341,32 @@ fn build_styled_prompt(raw: &str, style: Style) -> (String, String) {
         Style::Prompt => (SYSTEM_PROMPT, EXAMPLES_PROMPT),
         Style::Clean => return build_prompt(raw),
     };
+    // Framing every turn as "dictation to rewrite" stops models from answering a request
+    // (or continuing the examples' topics) instead of rewriting it.
+    let frame = |text: &str| format!("Dictation to rewrite (don't answer it):\n{text}");
     let mut prefix = format!("<|im_start|>system\n{system}<|im_end|>\n");
     for (input, output) in examples {
         prefix.push_str(&format!(
-            "<|im_start|>user\n{input}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n{output}<|im_end|>\n"
+            "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n{output}<|im_end|>\n",
+            frame(input)
         ));
     }
     let suffix = format!(
         "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
-        raw.trim()
+        frame(raw.trim())
     );
     (prefix, suffix)
 }
 
 /// The prompt for MuskFlow's fine-tuned models; must match finetune/lite_cleanup.py byte for byte.
-pub fn build_compact_prompt(raw: &str) -> (String, String) {
-    let prefix = format!("<|im_start|>system\n{COMPACT_SYSTEM}<|im_end|>\n");
+/// Casual uses the clean prompt: the fine-tunes treat it as plain cleanup.
+pub fn build_compact_prompt(raw: &str, style: Style) -> (String, String) {
+    let system = match style {
+        Style::Clean | Style::Casual => COMPACT_SYSTEM,
+        Style::Formal => COMPACT_FORMAL,
+        Style::Prompt => COMPACT_PROMPT,
+    };
+    let prefix = format!("<|im_start|>system\n{system}<|im_end|>\n");
     let suffix = format!(
         "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n",
         raw.trim()
@@ -355,14 +374,34 @@ pub fn build_compact_prompt(raw: &str) -> (String, String) {
     (prefix, suffix)
 }
 
-/// MuskFlow's own fine-tunes are published as `MuskFlow-*.gguf`.
+/// MuskFlow's own fine-tunes are published as `MuskFlow-*.gguf`, with `-rN` from round 2
+/// on ("MuskFlow-Lite-0.8B-r2-Q4_K_M"). Returns the round, or `None` for other models.
+pub fn muskflow_round(name: &str) -> Option<u32> {
+    let lower = name.to_lowercase();
+    if !lower.starts_with("muskflow") {
+        return None;
+    }
+    let round = lower
+        .split('-')
+        .find_map(|part| part.strip_prefix('r')?.parse().ok())
+        .unwrap_or(1);
+    Some(round)
+}
+
 pub fn is_muskflow_model(name: &str) -> bool {
-    name.to_lowercase().starts_with("muskflow")
+    muskflow_round(name).is_some()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reads_the_fine_tune_round_from_the_file_name() {
+        assert_eq!(muskflow_round("Qwen3.5-0.8B-Q4_K_M"), None);
+        assert_eq!(muskflow_round("MuskFlow-Lite-Cleanup-0.8B-Q4_K_M"), Some(1));
+        assert_eq!(muskflow_round("MuskFlow-Lite-0.8B-r2-Q4_K_M"), Some(2));
+    }
 
     #[test]
     fn short_clean_phrases_skip_the_llm() {
