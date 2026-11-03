@@ -30,7 +30,21 @@ Add or check tiers any time:
 
 ## Use
 
-Dictate from your mic (speak, then press Enter):
+**Dictate into any app (macOS):** hold **Fn**, speak, let go, and the cleaned text is typed at your cursor.
+
+```bash
+./target/release/muskflow app --tier standard
+```
+
+The first run asks for two permissions in System Settings → Privacy & Security, for the app you run MuskFlow from (Terminal, iTerm…):
+- **Input Monitoring**, to see the Fn key.
+- **Accessibility**, to type the text.
+
+Also set System Settings → Keyboard → "Press 🌐 key to" → **Do Nothing**, so Fn doesn't open the emoji picker too. Pressing another key while holding Fn (Fn+←, Fn+F5) cancels, so Fn's shortcuts keep working. Fn + Control is reserved for command mode (coming soon).
+
+Your clipboard is restored after each dictation. Models stay loaded; the mic is on only while Fn is held.
+
+**Try it in the terminal** (speak, then press Enter):
 
 ```bash
 ./target/release/muskflow listen --tier standard

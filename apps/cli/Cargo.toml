@@ -1,6 +1,6 @@
 [package]
 name = "muskflow-cli"
-description = "Headless MuskFlow: transcribe, stream, listen, bench"
+description = "MuskFlow from the terminal: app (hold Fn to dictate), listen, transcribe, bench"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -16,6 +16,8 @@ mf-eval.workspace = true
 mf-models.workspace = true
 mf-llm.workspace = true
 mf-cleanup.workspace = true
+mf-hotkey.workspace = true
+mf-insert.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 crossbeam-channel.workspace = true

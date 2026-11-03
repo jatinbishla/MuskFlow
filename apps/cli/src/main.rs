@@ -1,5 +1,6 @@
 //! `muskflow` — headless MuskFlow for development, benchmarking and scripting.
 
+mod app;
 mod bench;
 
 use std::io::{BufRead, Write};
@@ -9,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
-use mf_asr::{CommitterConfig, Engine, SessionStats, Word};
+use mf_asr::{CommitterConfig, Engine, Hypothesis, SessionStats, Word};
 use mf_audio::{
     MicCapture, SpeechTrimmer, VadConfig, list_inputs, load_wav_16k, samples_to_secs, save_wav_16k,
 };
@@ -97,6 +98,13 @@ enum Cmd {
         #[arg(long)]
         save: Option<PathBuf>,
     },
+    /// Run in the background: hold Fn anywhere to dictate, and the cleaned text is typed at
+    /// your cursor. Fn + Control is command mode. macOS; needs Input Monitoring and Accessibility.
+    App {
+        /// Input device: part of its name or id (see `muskflow devices`). Default: system input.
+        #[arg(long)]
+        mic: Option<String>,
+    },
     /// List microphones.
     Devices,
     /// Download or list models. Everything MuskFlow needs comes through here.
@@ -155,6 +163,7 @@ fn main() -> Result<()> {
         Cmd::Transcribe { wavs, no_vad } => transcribe(&cli.common, wavs, *no_vad),
         Cmd::Stream { wav, fast } => stream(&cli.common, wav, *fast),
         Cmd::Listen { mic, save } => listen(&cli.common, mic.as_deref(), save.as_deref()),
+        Cmd::App { mic } => app::run(&cli.common, mic.as_deref()),
         Cmd::Devices => devices(),
         Cmd::Models {
             action: ModelsCmd::Install { tiers },
@@ -216,7 +225,7 @@ pub(crate) fn llm_path(c: &Common, tier: Tier) -> PathBuf {
 }
 
 /// The ASR model directory: `--asr` if given, otherwise the tier's.
-fn asr_dir(c: &Common) -> PathBuf {
+pub(crate) fn asr_dir(c: &Common) -> PathBuf {
     match &c.asr {
         Some(dir) => c.models.join(dir),
         None => c.tier.asr_path(&c.models),
@@ -347,7 +356,7 @@ pub(crate) fn load_engine(c: &Common, dir: &Path) -> Result<Engine> {
     Ok(engine)
 }
 
-fn load_vad(c: &Common) -> Result<SpeechTrimmer> {
+pub(crate) fn load_vad(c: &Common) -> Result<SpeechTrimmer> {
     SpeechTrimmer::load(&c.models.join("silero_vad.onnx"), VadConfig::default())
 }
 
@@ -463,19 +472,19 @@ pub(crate) fn replay(engine: &Engine, pcm: &[f32], fast: bool, print: bool) -> R
     })
 }
 
-fn listen(c: &Common, device: Option<&str>, save: Option<&Path>) -> Result<()> {
-    let engine = load_engine(c, &asr_dir(c))?;
-    let vad = load_vad(c)?;
-
+/// One dictation from the mic. Decodes while audio arrives, until `wait` returns: `true`
+/// to finish and keep the transcript, `false` to discard it. With `live`, words are
+/// printed to stderr as they become final.
+pub(crate) fn record(
+    engine: &Engine,
+    device: Option<&str>,
+    live: bool,
+    wait: impl FnOnce(&MicCapture) -> Result<bool>,
+) -> Result<Option<Recording>> {
     let (tx, rx) = crossbeam_channel::unbounded::<Vec<f32>>();
     let mic = MicCapture::start(device, tx).context("could not open the microphone")?;
-    eprintln!(
-        "· mic \"{}\" ({}) @ {} Hz × {} ch — speak, then press Enter",
-        mic.info.name, mic.info.device, mic.info.sample_rate, mic.info.channels
-    );
-
     let stopping = AtomicBool::new(false);
-    std::thread::scope(|s| -> Result<()> {
+    std::thread::scope(|s| -> Result<_> {
         let worker = s.spawn(|| -> Result<_> {
             let mut session = engine.session()?;
             let mut all = Vec::new();
@@ -491,7 +500,10 @@ fn listen(c: &Common, device: Option<&str>, save: Option<&Path>) -> Result<()> {
                     // Key is up: the final decode covers this, so don't spend a decode on it now.
                     session.append(&batch);
                 } else {
-                    print_committed(&session.push(&batch)?);
+                    let words = session.push(&batch)?;
+                    if live {
+                        print_committed(&words);
+                    }
                 }
                 batch.clear();
             }
@@ -500,40 +512,81 @@ fn listen(c: &Common, device: Option<&str>, save: Option<&Path>) -> Result<()> {
             Ok((hyp, stats, key_up.elapsed(), all))
         });
 
-        let mut line = String::new();
-        std::io::stdin().lock().read_line(&mut line)?;
-        let stop = Instant::now();
+        let keep = wait(&mic);
+        let stopped = Instant::now();
         stopping.store(true, Ordering::Release);
         let peak = mic.peak();
         mic.stop();
-        let (hyp, stats, finish, all) = worker.join().expect("ASR worker panicked")?;
-        if let Some(path) = save {
-            save_wav_16k(path, &all)?;
-            eprintln!("· saved recording to {}", path.display());
-        }
-
-        let peak_db = 20.0 * peak.max(1e-9).log10();
-        if peak < 1e-3 {
-            eprintln!(
-                "· the mic sent silence (peak {peak_db:.0} dBFS). Check it isn't muted, or pick another with --mic (see `muskflow devices`).\n  Bluetooth headsets often deliver nothing until they switch to headset mode."
-            );
-            return Ok(());
-        }
-        if vad.speech_bounds(&all).is_none() {
-            eprintln!("· no speech detected (mic peak {peak_db:.0} dBFS)");
-            return Ok(());
-        }
-        println!("\n{}", dictionary(c)?.apply(&hyp.text()));
-        eprintln!(
-            "· spoke {:.2}s · {} decodes · tail {:.2}s in {} · Enter → text {}",
-            samples_to_secs(all.len()),
-            stats.decodes,
-            stats.tail_secs,
-            ms(finish),
-            ms(stop.elapsed())
-        );
-        Ok(())
+        let (hyp, stats, finish, audio) = worker.join().expect("ASR worker panicked")?;
+        Ok(keep?.then_some(Recording {
+            hyp,
+            stats,
+            finish,
+            audio,
+            peak,
+            stopped,
+        }))
     })
+}
+
+pub(crate) struct Recording {
+    pub hyp: Hypothesis,
+    pub stats: SessionStats,
+    /// Time from key-up to the final transcript.
+    pub finish: Duration,
+    pub audio: Vec<f32>,
+    pub peak: f32,
+    /// When the user stopped speaking (key-up).
+    pub stopped: Instant,
+}
+
+impl Recording {
+    /// Why there's nothing to insert, if anything: a silent mic or no speech.
+    pub fn problem(&self, vad: &SpeechTrimmer) -> Option<String> {
+        let peak_db = 20.0 * self.peak.max(1e-9).log10();
+        if self.peak < 1e-3 {
+            return Some(format!(
+                "the mic sent silence (peak {peak_db:.0} dBFS). Check it isn't muted, or pick another with --mic (see `muskflow devices`).\n  Bluetooth headsets often deliver nothing until they switch to headset mode."
+            ));
+        }
+        if vad.speech_bounds(&self.audio).is_none() {
+            return Some(format!("no speech detected (mic peak {peak_db:.0} dBFS)"));
+        }
+        None
+    }
+}
+
+fn listen(c: &Common, device: Option<&str>, save: Option<&Path>) -> Result<()> {
+    let engine = load_engine(c, &asr_dir(c))?;
+    let vad = load_vad(c)?;
+    let r = record(&engine, device, true, |mic| {
+        eprintln!(
+            "· mic \"{}\" ({}) @ {} Hz × {} ch — speak, then press Enter",
+            mic.info.name, mic.info.device, mic.info.sample_rate, mic.info.channels
+        );
+        let mut line = String::new();
+        std::io::stdin().lock().read_line(&mut line)?;
+        Ok(true)
+    })?
+    .expect("listen always keeps the recording");
+    if let Some(path) = save {
+        save_wav_16k(path, &r.audio)?;
+        eprintln!("· saved recording to {}", path.display());
+    }
+    if let Some(problem) = r.problem(&vad) {
+        eprintln!("· {problem}");
+        return Ok(());
+    }
+    println!("\n{}", dictionary(c)?.apply(&r.hyp.text()));
+    eprintln!(
+        "· spoke {:.2}s · {} decodes · tail {:.2}s in {} · Enter → text {}",
+        samples_to_secs(r.audio.len()),
+        r.stats.decodes,
+        r.stats.tail_secs,
+        ms(r.finish),
+        ms(r.stopped.elapsed())
+    );
+    Ok(())
 }
 
 fn print_committed(words: &[Word]) {
@@ -547,6 +600,6 @@ fn print_committed(words: &[Word]) {
     let _ = out.flush();
 }
 
-fn ms(d: Duration) -> String {
+pub(crate) fn ms(d: Duration) -> String {
     format!("{:.0}ms", d.as_secs_f64() * 1000.0)
 }
