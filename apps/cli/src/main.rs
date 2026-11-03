@@ -27,11 +27,12 @@ use mf_models::{Tier, parse_tiers};
 struct Cli {
     #[command(flatten)]
     common: Common,
+    /// Defaults to `app` inside MuskFlow.app (launched with no arguments).
     #[command(subcommand)]
-    cmd: Cmd,
+    cmd: Option<Cmd>,
 }
 
-#[derive(Args)]
+#[derive(Args, Clone)]
 pub(crate) struct Common {
     /// Directory for downloaded models (`muskflow models install` fills it).
     #[arg(long, env = "MUSKFLOW_MODELS", default_value = "models", global = true)]
@@ -157,9 +158,22 @@ enum ModelsCmd {
 }
 
 fn main() -> Result<()> {
+    if app::in_app_bundle() {
+        app::log_to_file();
+    }
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let cli = Cli::parse();
-    match &cli.cmd {
+    let cmd = match &cli.cmd {
+        Some(cmd) => cmd,
+        // Double-clicked MuskFlow.app: macOS starts the binary with no arguments.
+        None if app::in_app_bundle() => &Cmd::App { mic: None },
+        None => {
+            use clap::CommandFactory;
+            Cli::command().print_help()?;
+            return Ok(());
+        }
+    };
+    match cmd {
         Cmd::Transcribe { wavs, no_vad } => transcribe(&cli.common, wavs, *no_vad),
         Cmd::Stream { wav, fast } => stream(&cli.common, wav, *fast),
         Cmd::Listen { mic, save } => listen(&cli.common, mic.as_deref(), save.as_deref()),

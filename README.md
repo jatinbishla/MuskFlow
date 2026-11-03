@@ -33,16 +33,19 @@ Add or check tiers any time:
 **Dictate into any app (macOS):** hold **Fn**, speak, let go, and the cleaned text is typed at your cursor.
 
 ```bash
-./target/release/muskflow app --tier standard
+scripts/make-app.sh standard      # builds MuskFlow.app and installs it in /Applications
 ```
 
-The first run asks for two permissions in System Settings → Privacy & Security, for the app you run MuskFlow from (Terminal, iTerm…):
+Open **MuskFlow** from Applications or Spotlight. It lives in the menu bar (no Dock icon). A pill at the bottom of the screen shows "Listening" while you hold Fn, with a sound at the start and when the text is typed. The menu has **Edit Dictionary…** (names and terms spelled your way, applied as soon as you save) and **Launch at Login**.
+
+The first time, allow MuskFlow under System Settings → Privacy & Security, then quit and reopen it:
 - **Input Monitoring**, to see the Fn key.
 - **Accessibility**, to type the text.
+- **Microphone**, asked automatically.
 
-Also set System Settings → Keyboard → "Press 🌐 key to" → **Do Nothing**, so Fn doesn't open the emoji picker too. Pressing another key while holding Fn (Fn+←, Fn+F5) cancels, so Fn's shortcuts keep working. Fn + Control is reserved for command mode (coming soon).
+Also set System Settings → Keyboard → "Press 🌐 key to" → **Do Nothing**, so Fn doesn't open the emoji picker too. Pressing another key while holding Fn (Fn+←, Fn+F5) cancels, so Fn's shortcuts keep working. Fn + Control is reserved for command mode (coming soon). Your clipboard is restored after each dictation. Models stay loaded; the mic is on only while Fn is held. Log: `~/Library/Logs/MuskFlow.log`.
 
-Your clipboard is restored after each dictation. Models stay loaded; the mic is on only while Fn is held.
+From a terminal, `muskflow app` does the same. Grant the permissions to the terminal app instead.
 
 **Try it in the terminal** (speak, then press Enter):
 

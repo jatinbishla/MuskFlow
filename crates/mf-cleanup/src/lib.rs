@@ -111,6 +111,11 @@ impl Cleaner {
         self
     }
 
+    /// Swaps in an edited dictionary without reloading the model.
+    pub fn set_dictionary(&mut self, dictionary: Dictionary) {
+        self.dictionary = dictionary;
+    }
+
     pub fn llm(&self) -> &Llm {
         &self.llm
     }

@@ -1,0 +1,22 @@
+[package]
+name = "mf-shell"
+description = "MuskFlow's macOS shell: menu-bar icon, listening pill, sounds, launch at login"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+log.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.5"
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSString", "NSObject", "NSGeometry", "NSError", "NSThread"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "std", "objc2-core-foundation", "NSApplication", "NSRunningApplication", "NSResponder", "NSStatusBar", "NSStatusItem",
+    "NSStatusBarButton", "NSButton", "NSControl", "NSView", "NSMenu", "NSMenuItem", "NSImage", "NSPanel",
+    "NSWindow", "NSBox", "NSTextField", "NSText", "NSColor", "NSFont", "NSSound", "NSScreen", "NSGraphics",
+    "NSLayoutConstraint", "NSCell", "NSActionCell", "NSTextFieldCell", "NSButtonCell", "NSAppearance",
+] }
+objc2-service-management = { version = "0.3.2", default-features = false, features = ["std", "SMAppService", "objc2", "objc2-foundation"] }
+dispatch2 = "0.3.1"

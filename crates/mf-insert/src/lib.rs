@@ -31,14 +31,15 @@ pub fn insert(text: &str) -> Result<()> {
 
 #[cfg(target_os = "macos")]
 mod imp {
+    use std::sync::Mutex;
+    use std::thread::JoinHandle;
     use std::time::Duration;
 
     use anyhow::{Result, bail};
     use objc2::rc::Retained;
     use objc2::runtime::ProtocolObject;
     use objc2_app_kit::{
-        NSPasteboard, NSPasteboardItem, NSPasteboardType, NSPasteboardTypeString,
-        NSPasteboardWriting,
+        NSPasteboard, NSPasteboardItem, NSPasteboardTypeString, NSPasteboardWriting,
     };
     use objc2_core_graphics::{
         CGEvent, CGEventFlags, CGEventTapLocation, CGPreflightPostEventAccess,
@@ -59,13 +60,21 @@ mod imp {
         CGRequestPostEventAccess()
     }
 
-    type Snapshot = Vec<Vec<(Retained<NSPasteboardType>, Retained<NSData>)>>;
+    /// Pasteboard items as (type, bytes) pairs: plain data, so it can move to the restore thread.
+    type Snapshot = Vec<Vec<(String, Vec<u8>)>>;
+
+    /// The restore still running from the previous insert, if any.
+    static PENDING_RESTORE: Mutex<Option<JoinHandle<()>>> = Mutex::new(None);
 
     pub fn insert(text: &str) -> Result<()> {
         if !has_permission() {
             bail!(
                 "MuskFlow can't type into other apps yet. Allow it in System Settings → Privacy & Security → Accessibility."
             );
+        }
+        // A back-to-back dictation must not snapshot our own text as "the user's clipboard".
+        if let Some(prev) = PENDING_RESTORE.lock().unwrap().take() {
+            let _ = prev.join();
         }
         let pb = NSPasteboard::generalPasteboard();
         let saved = snapshot(&pb);
@@ -74,15 +83,19 @@ mod imp {
         // SAFETY: NSPasteboardTypeString is an AppKit constant.
         pb.setString_forType(&NSString::from_str(text), unsafe { NSPasteboardTypeString });
         let ours = pb.changeCount();
-
         press_cmd_v();
-        std::thread::sleep(PASTE_SETTLE);
 
-        if pb.changeCount() == ours {
-            restore(&pb, &saved);
-        } else {
-            log::info!("clipboard changed during paste; not restoring it");
-        }
+        // The text is in; give the app time to read the pasteboard, then put the user's
+        // clipboard back without making the caller wait.
+        *PENDING_RESTORE.lock().unwrap() = Some(std::thread::spawn(move || {
+            std::thread::sleep(PASTE_SETTLE);
+            let pb = NSPasteboard::generalPasteboard();
+            if pb.changeCount() == ours {
+                restore(&pb, &saved);
+            } else {
+                log::info!("clipboard changed during paste; not restoring it");
+            }
+        }));
         Ok(())
     }
 
@@ -95,7 +108,7 @@ mod imp {
             .map(|item| {
                 item.types()
                     .iter()
-                    .filter_map(|t| item.dataForType(&t).map(|d| (t, d)))
+                    .filter_map(|t| item.dataForType(&t).map(|d| (t.to_string(), d.to_vec())))
                     .collect()
             })
             .collect()
@@ -111,7 +124,7 @@ mod imp {
             .map(|types| {
                 let item = NSPasteboardItem::new();
                 for (t, d) in types {
-                    item.setData_forType(d, t);
+                    item.setData_forType(&NSData::with_bytes(d), &NSString::from_str(t));
                 }
                 ProtocolObject::from_retained(item)
             })
