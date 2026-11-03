@@ -73,9 +73,10 @@ pub(crate) struct Common {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Transcribe a WAV file in one pass.
+    /// Transcribe WAV files in one pass. With several files, prints `<file>\t<text>` per line.
     Transcribe {
-        wav: PathBuf,
+        #[arg(required = true)]
+        wavs: Vec<PathBuf>,
         /// Skip VAD silence trimming.
         #[arg(long)]
         no_vad: bool,
@@ -126,6 +127,14 @@ enum Cmd {
     },
     /// Clean up a piece of dictated text with the tier's LLM (reads stdin if no text given).
     Clean { text: Option<String> },
+    /// Print the cleanup prompt for `text` as prefix, a NUL byte, then suffix (for fine-tuning).
+    #[command(hide = true)]
+    Prompt {
+        text: String,
+        /// The compact prompt MuskFlow's fine-tuned models use.
+        #[arg(long)]
+        compact: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -143,7 +152,7 @@ fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     let cli = Cli::parse();
     match &cli.cmd {
-        Cmd::Transcribe { wav, no_vad } => transcribe(&cli.common, wav, *no_vad),
+        Cmd::Transcribe { wavs, no_vad } => transcribe(&cli.common, wavs, *no_vad),
         Cmd::Stream { wav, fast } => stream(&cli.common, wav, *fast),
         Cmd::Listen { mic, save } => listen(&cli.common, mic.as_deref(), save.as_deref()),
         Cmd::Devices => devices(),
@@ -170,6 +179,15 @@ fn main() -> Result<()> {
             out.as_deref(),
         ),
         Cmd::Clean { text } => clean(&cli.common, text.as_deref()),
+        Cmd::Prompt { text, compact } => {
+            let (prefix, suffix) = if *compact {
+                mf_cleanup::build_compact_prompt(text)
+            } else {
+                mf_cleanup::build_prompt(text)
+            };
+            print!("{prefix}\0{suffix}");
+            Ok(())
+        }
     }
 }
 
@@ -333,41 +351,53 @@ fn load_vad(c: &Common) -> Result<SpeechTrimmer> {
     SpeechTrimmer::load(&c.models.join("silero_vad.onnx"), VadConfig::default())
 }
 
-fn transcribe(c: &Common, wav: &Path, no_vad: bool) -> Result<()> {
+fn transcribe(c: &Common, wavs: &[PathBuf], no_vad: bool) -> Result<()> {
     let engine = load_engine(c, &asr_dir(c))?;
     let asr = engine
         .transcriber()
         .context("native streaming models can't decode a file in one pass; use `stream`")?;
-    let pcm = load_wav_16k(wav)?;
-    let t = Instant::now();
-    let speech = if no_vad {
-        &pcm[..]
-    } else {
-        load_vad(c)?.trim(&pcm)
-    };
-    let vad_time = t.elapsed();
-    if speech.is_empty() {
-        eprintln!("· no speech detected");
-        return Ok(());
-    }
-
-    // One warm-up decode so the timing reflects steady state, not first-call allocation.
+    let vad = if no_vad { None } else { Some(load_vad(c)?) };
     let hotwords = asr_hotwords(c)?;
-    asr.transcribe(&speech[..speech.len().min(16_000)], &hotwords)?;
-    let t = Instant::now();
-    let hyp = asr.transcribe(speech, &hotwords)?;
-    let dt = t.elapsed();
+    let dict = dictionary(c)?;
+    let batch = wavs.len() > 1;
+    for wav in wavs {
+        let pcm = load_wav_16k(wav)?;
+        let t = Instant::now();
+        let speech = match &vad {
+            Some(v) => v.trim(&pcm),
+            None => &pcm[..],
+        };
+        let vad_time = t.elapsed();
+        if speech.is_empty() {
+            if batch {
+                println!("{}\t", wav.display());
+            } else {
+                eprintln!("· no speech detected");
+            }
+            continue;
+        }
+        if batch {
+            let hyp = asr.transcribe(speech, &hotwords)?;
+            println!("{}\t{}", wav.display(), dict.apply(&hyp.text()));
+            continue;
+        }
 
-    println!("{}", dictionary(c)?.apply(&hyp.text()));
-    let audio = samples_to_secs(pcm.len());
-    eprintln!(
-        "· audio {:.2}s → speech {:.2}s · vad {} · decode {} · {:.0}× real time",
-        audio,
-        samples_to_secs(speech.len()),
-        ms(vad_time),
-        ms(dt),
-        samples_to_secs(speech.len()) / dt.as_secs_f32()
-    );
+        // One warm-up decode so the timing reflects steady state, not first-call allocation.
+        asr.transcribe(&speech[..speech.len().min(16_000)], &hotwords)?;
+        let t = Instant::now();
+        let hyp = asr.transcribe(speech, &hotwords)?;
+        let dt = t.elapsed();
+
+        println!("{}", dict.apply(&hyp.text()));
+        eprintln!(
+            "· audio {:.2}s → speech {:.2}s · vad {} · decode {} · {:.0}× real time",
+            samples_to_secs(pcm.len()),
+            samples_to_secs(speech.len()),
+            ms(vad_time),
+            ms(dt),
+            samples_to_secs(speech.len()) / dt.as_secs_f32()
+        );
+    }
     Ok(())
 }
 

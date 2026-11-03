@@ -99,7 +99,7 @@ muskflow/
 ```
 
 - Hotkey modes: **hold-to-talk** (default), **toggle** (tap on / tap off), **hands-free** (toggle + VAD auto-stop after 1.5 s silence).
-- Double-tap hotkey = **Command mode** (see §7). Esc = cancel at any point; nothing is inserted.
+- **Fn** = dictate (Clean/Polish/Prompt, chosen by the app profile). **Fn + Control** = **Command mode** (see §7): speak an instruction, MuskFlow reads the screen and writes the text. Double-tap Fn is an alternative trigger. Esc = cancel at any point; nothing is inserted. Capturing Fn needs a CGEventTap with the Input Monitoring permission.
 - Every transition is timestamped → per-session latency breakdown (in-app debug panel + `--bench`).
 
 ### 3.2 Critical-path timing (where the speed comes from)
@@ -244,7 +244,12 @@ Score them by recency (closer to caret is better) and frequency. Keep the top 30
 | **Verbatim** | profile (Terminal default) | nothing; rules only (spoken punctuation, casing) | n/a |
 | **Clean** *(default)* | normal dictation | fillers, repetitions, self-corrections, punctuation, casing, paragraphs, lists, numbers/dates, name spelling | **strict** |
 | **Polish** | profile (e.g. Email) or say "polish" at the end | above + smooth phrasing, merge fragments, fix grammar, match app tone | medium |
-| **Command** | double-tap hotkey, or text selected | follow a spoken instruction on the selection/field: "make this friendlier", "turn into bullet points", "reply saying yes but Friday", "translate to Hindi" | none (shows a preview first) |
+| **Prompt** *(USP)* | profile: AI apps (Claude, Claude Code, ChatGPT, Codex, Cursor, Gemini, a terminal running an AI CLI) | turn a rambling spoken request into a short, structured prompt: goal, context, constraints, output wanted; drop pleasantries and repetition so it uses the fewest tokens. Must keep every requirement, number, file path and identifier, spelled from screen context | medium (no new requirements, every constraint kept) |
+| **Command** | Fn + Control (or double-tap Fn), or text selected | follow a spoken instruction on the selection/field: "make this friendlier", "turn into bullet points", "reply saying yes but Friday", "translate to Hindi" | none (shows a preview first) |
+
+**Tone follows the conversation, not just the app:** the profile picks a default (Gmail, Teams → formal), and the last few messages of the open chat (via the context engine) adjust it: the same Teams app is formal with a manager and casual in a chat with a friend.
+
+**Model sizes per mode:** Clean runs on every tier. Command mode writes new text, which an 0.8B model does poorly, so it uses the Standard/Max LLM locally or a bring-your-own endpoint the user picks; Lite users are told so.
 
 Inline voice commands, handled by rules before the LLM: "new line", "new paragraph", "bullet point", "scratch that" (deletes the last sentence), "all caps …", "press enter" (at the end: insert, then send Enter, opt-in).
 
