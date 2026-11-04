@@ -23,6 +23,9 @@ struct Term {
     words: usize,
     letters: String,
     sound: String,
+    /// Read off the screen (a name in the email thread) rather than the user's own list:
+    /// it only fixes a misspelling, never re-cases a word ("mark" stays a verb).
+    screen: bool,
 }
 
 impl Dictionary {
@@ -35,6 +38,7 @@ impl Dictionary {
                 words: text.split_whitespace().count(),
                 letters: letters(&text),
                 sound: sound(&text),
+                screen: false,
                 text,
             })
             .filter(|t| t.letters.len() >= 3)
@@ -51,6 +55,19 @@ impl Dictionary {
                 .map(|l| l.split('#').next().unwrap_or("").trim())
                 .filter(|l| !l.is_empty()),
         )
+    }
+
+    /// This dictionary plus names read off the screen. The user's own terms win a tie.
+    pub fn with_screen_terms<S: AsRef<str>>(&self, names: impl IntoIterator<Item = S>) -> Self {
+        let mut extra = Self::new(names).terms;
+        extra.retain(|t| !self.terms.iter().any(|u| u.letters == t.letters));
+        for t in &mut extra {
+            t.screen = true;
+        }
+        let mut terms = self.terms.clone();
+        terms.extend(extra);
+        terms.sort_by_key(|t| (std::cmp::Reverse(t.letters.len()), t.screen));
+        Self { terms }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -134,6 +151,9 @@ struct Match {
 /// Letter edits from `said` to the term, if it's a plausible mishearing of it.
 fn edits_to(term: &Term, said: &str) -> Option<usize> {
     let l = letters(said);
+    if term.screen && (l == term.letters || crate::guard::is_everyday_word(&l)) {
+        return None;
+    }
     if l == term.letters {
         return Some(0); // only case or spacing differs
     }
@@ -247,6 +267,15 @@ fn levenshtein(a: &str, b: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn screen_names_fix_misspellings_only() {
+        let d = Dictionary::new(["SubFlo"]).with_screen_terms(["Priya", "Mark", "Gaurav"]);
+        assert_eq!(
+            d.apply("tell pria and garv to mark the subflow invoice"),
+            "tell Priya and Gaurav to mark the SubFlo invoice"
+        );
+    }
 
     fn dict() -> Dictionary {
         Dictionary::new(["SubFlo", "Jatin", "foreman", "lien waivers", "Kubernetes"])

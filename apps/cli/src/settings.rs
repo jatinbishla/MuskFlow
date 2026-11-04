@@ -16,6 +16,12 @@ struct Data {
     /// Model tier picked in the window; overrides the one the app was built with.
     #[serde(default)]
     tier: Option<String>,
+    /// Read the text on screen (names, tone, command-mode context). On unless turned off.
+    #[serde(default)]
+    no_screen_context: bool,
+    /// Add words the user corrects after a dictation to the dictionary. On unless turned off.
+    #[serde(default)]
+    no_learning: bool,
 }
 
 /// Shared between the dictation loop and the window; saved on every change.
@@ -56,6 +62,22 @@ impl Settings {
 
     pub fn set_tier(&self, tier: Tier) -> anyhow::Result<()> {
         self.update(|d| d.tier = Some(tier.to_string()))
+    }
+
+    pub fn screen_context(&self) -> bool {
+        !self.data.lock().unwrap().no_screen_context
+    }
+
+    pub fn set_screen_context(&self, on: bool) -> anyhow::Result<()> {
+        self.update(|d| d.no_screen_context = !on)
+    }
+
+    pub fn learning(&self) -> bool {
+        !self.data.lock().unwrap().no_learning
+    }
+
+    pub fn set_learning(&self, on: bool) -> anyhow::Result<()> {
+        self.update(|d| d.no_learning = !on)
     }
 
     fn update(&self, change: impl FnOnce(&mut Data)) -> anyhow::Result<()> {

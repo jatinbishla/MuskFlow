@@ -26,6 +26,12 @@ pub fn copy(text: &str) -> Result<()> {
     imp::copy(text)
 }
 
+/// The focused app's selected text, fetched with ⌘C, for apps that don't expose it through
+/// Accessibility. The user's clipboard is put back. `None` if nothing was copied.
+pub fn copy_selection() -> Option<String> {
+    imp::copy_selection()
+}
+
 /// Inserts `text` at the cursor of the focused app.
 pub fn insert(text: &str) -> Result<()> {
     if text.is_empty() {
@@ -52,8 +58,11 @@ mod imp {
     };
     use objc2_foundation::{NSArray, NSData, NSString};
 
-    /// kVK_ANSI_V.
+    /// kVK_ANSI_V, kVK_ANSI_C.
     const KEY_V: u16 = 9;
+    const KEY_C: u16 = 8;
+    /// How long an app gets to answer ⌘C.
+    const COPY_WAIT: Duration = Duration::from_millis(300);
     /// How long the target app gets to read the pasteboard before we restore it.
     const PASTE_SETTLE: Duration = Duration::from_millis(250);
 
@@ -145,9 +154,39 @@ mod imp {
         pb.writeObjects(&NSArray::from_retained_slice(&items));
     }
 
+    pub fn copy_selection() -> Option<String> {
+        if !has_permission() {
+            return None;
+        }
+        if let Some(prev) = PENDING_RESTORE.lock().unwrap().take() {
+            let _ = prev.join();
+        }
+        let pb = NSPasteboard::generalPasteboard();
+        let saved = snapshot(&pb);
+        let before = pb.changeCount();
+        press_cmd(KEY_C);
+        let t = std::time::Instant::now();
+        while pb.changeCount() == before && t.elapsed() < COPY_WAIT {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        if pb.changeCount() == before {
+            return None; // nothing selected
+        }
+        // SAFETY: NSPasteboardTypeString is an AppKit constant.
+        let text = pb
+            .stringForType(unsafe { NSPasteboardTypeString })
+            .map(|s| s.to_string());
+        restore(&pb, &saved);
+        text.filter(|t| !t.trim().is_empty())
+    }
+
     fn press_cmd_v() {
+        press_cmd(KEY_V);
+    }
+
+    fn press_cmd(key: u16) {
         for down in [true, false] {
-            if let Some(ev) = CGEvent::new_keyboard_event(None, KEY_V, down) {
+            if let Some(ev) = CGEvent::new_keyboard_event(None, key, down) {
                 CGEvent::set_flags(Some(&ev), CGEventFlags::MaskCommand);
                 CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&ev));
             }
@@ -173,5 +212,9 @@ mod imp {
 
     pub fn copy(_text: &str) -> Result<()> {
         bail!("the clipboard is macOS-only for now")
+    }
+
+    pub fn copy_selection() -> Option<String> {
+        None
     }
 }

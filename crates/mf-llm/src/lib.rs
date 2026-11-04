@@ -55,7 +55,7 @@ pub struct LlmConfig {
 impl Default for LlmConfig {
     fn default() -> Self {
         Self {
-            n_ctx: 2048,
+            n_ctx: 4096,
             n_threads: 4,
             gpu_layers: 999,
             speculative: true,
@@ -132,6 +132,19 @@ impl Llm {
 
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Tokens `text` takes in this model's vocabulary (special tokens parsed).
+    pub fn count_tokens(&self, text: &str) -> usize {
+        self.model
+            .vocab()
+            .tokenize(text.as_bytes(), false, true)
+            .len()
+    }
+
+    /// The context window in tokens: prompt plus generated text must fit in it.
+    pub fn context_tokens(&self) -> usize {
+        self.cfg.n_ctx as usize - MAX_DRAFT - 2
     }
 
     /// Whether prompt-lookup speculation is active for this model.

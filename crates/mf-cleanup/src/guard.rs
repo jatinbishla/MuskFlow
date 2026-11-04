@@ -287,6 +287,11 @@ fn names(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// Whether a lower-case word is an everyday word, never a name ("the", "please", "okay").
+pub fn is_everyday_word(lower: &str) -> bool {
+    FUNCTION_WORDS.contains(&lower) || COMMON_WORDS.contains(&lower)
+}
+
 /// Everyday words a speech model may capitalise that are never names.
 const COMMON_WORDS: &[&str] = &[
     "i",

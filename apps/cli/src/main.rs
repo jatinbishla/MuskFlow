@@ -4,6 +4,7 @@ mod app;
 mod bench;
 mod history;
 mod hub;
+mod learn;
 mod settings;
 
 use std::io::{BufRead, Write};
@@ -144,6 +145,24 @@ enum Cmd {
         #[arg(long, default_value = "clean")]
         style: mf_cleanup::Style,
     },
+    /// Command mode without the keyboard: carry out a spoken instruction, optionally on a
+    /// selection and with what's on screen, as Fn + Control does in the app.
+    Command {
+        /// The instruction, as spoken ("reply saying I'll send it Friday").
+        instruction: String,
+        /// Selected text the instruction is about.
+        #[arg(long)]
+        selection: Option<String>,
+        /// A file with the window's visible text (an email thread, a chat).
+        #[arg(long)]
+        screen: Option<PathBuf>,
+        /// Where it's going, e.g. "Gmail".
+        #[arg(long)]
+        app: Option<String>,
+        /// clean, formal, casual or prompt: the tone to write in.
+        #[arg(long, default_value = "clean")]
+        style: mf_cleanup::Style,
+    },
     /// Print the cleanup prompt for `text` as prefix, a NUL byte, then suffix (for fine-tuning).
     #[command(hide = true)]
     Prompt {
@@ -213,6 +232,44 @@ fn main() -> Result<()> {
             out.as_deref(),
         ),
         Cmd::Clean { text, style } => clean(&cli.common, text.as_deref(), *style),
+        Cmd::Command {
+            instruction,
+            selection,
+            screen,
+            app,
+            style,
+        } => {
+            let window = match screen {
+                Some(p) => std::fs::read_to_string(p)
+                    .with_context(|| format!("could not read {}", p.display()))?,
+                None => String::new(),
+            };
+            let cleaner = load_cleaner(&cli.common, &llm_path(&cli.common, cli.common.tier))?;
+            let cx = mf_cleanup::command::Context {
+                app: app.as_deref(),
+                style: *style,
+                selection: selection.as_deref(),
+                before: "",
+                window: &window,
+            };
+            let r = cleaner.command(instruction, &cx)?;
+            println!("{}", r.text);
+            let g = &r.generation;
+            eprintln!(
+                "· {} in {} · prompt {} tok in {} · {} tok in {}",
+                if r.replaces_selection {
+                    "replace selection"
+                } else {
+                    "insert"
+                },
+                ms(r.time),
+                g.prompt_tokens,
+                ms(g.prefill_time),
+                g.generated_tokens,
+                ms(g.decode_time)
+            );
+            Ok(())
+        }
         Cmd::Prompt {
             text,
             compact,

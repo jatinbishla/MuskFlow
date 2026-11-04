@@ -368,11 +368,15 @@ const pages = {
       seg.append(b);
     }
     const yes = ok => $('span', { class: ok ? 'ok' : 'no' }, ok ? 'Allowed' : 'Not allowed');
-    const sw = $('div', { class: 'switch' + (s.login ? ' on' : '') });
-    sw.addEventListener('click', async () => {
-      try { const on = await mf.call('set_login', { on: !sw.classList.contains('on') }); sw.classList.toggle('on', on); }
-      catch (err) { toast(err.message); }
-    });
+    const toggle = (cmd, on) => {
+      const el = $('div', { class: 'switch' + (on ? ' on' : '') });
+      el.addEventListener('click', async () => {
+        try { el.classList.toggle('on', await mf.call(cmd, { on: !el.classList.contains('on') })); }
+        catch (err) { toast(err.message); }
+      });
+      return el;
+    };
+    const sw = toggle('set_login', s.login);
     const open = what => $('button', { class: 'btn', onclick: () => mf.call('open', { what }) },
       { dictionary: 'Open dictionary file', history: 'Show history file', log: 'Open log', privacy: 'Open Privacy settings' }[what]);
     return [
@@ -381,7 +385,7 @@ const pages = {
       $('div', { class: 'stack' },
         $('div', { class: 'card' }, $('h3', {}, 'Shortcuts'), $('div', { class: 'kv' },
           $('div', { class: 'k' }, 'Dictate'), $('div', {}, 'Hold ', $('kbd', {}, 'fn'), ', speak, let go'),
-          $('div', { class: 'k' }, 'Command mode'), $('div', {}, 'Hold ', $('kbd', {}, 'fn'), ' + ', $('kbd', {}, 'control'), ' (coming soon)'),
+          $('div', { class: 'k' }, 'Command mode'), $('div', {}, 'Hold ', $('kbd', {}, 'fn'), ' + ', $('kbd', {}, 'control'), ' and say what to write: \u201creply saying I\u2019ll send it Friday\u201d, or select text and say \u201cmake this shorter\u201d'),
           $('div', { class: 'k' }, 'Cancel'), $('div', {}, 'Press any other key while holding ', $('kbd', {}, 'fn')))),
         $('div', { class: 'card' }, $('h3', {}, 'Writing style'), seg,
           $('div', { class: 'styles' },
@@ -392,7 +396,10 @@ const pages = {
             $('div', { class: 'k' }, 'Clean'), $('div', {}, 'Everywhere else: fillers and false starts removed, nothing else changed.')),
           st.lite ? $('p', { class: 'note' }, 'On the Lite tier, Formal and AI prompt use Clean for now; Lite\'s small model can\'t rewrite safely yet.') : null),
         $('div', { class: 'card' }, $('h3', {}, 'General'), $('div', { class: 'kv' },
-          $('div', { class: 'k' }, 'Launch at login'), sw)),
+          $('div', { class: 'k' }, 'Launch at login'), sw,
+          $('div', { class: 'k' }, 'Use what\u2019s on screen'), toggle('set_screen_context', s.screen_context),
+          $('div', { class: 'k' }, 'Learn from my corrections'), toggle('set_learning', s.learning)),
+          $('p', { class: 'note' }, 'Screen: MuskFlow reads the text around your cursor (the email thread, the chat) to spell names right, match the conversation\u2019s tone, and give command mode context. It stays on this Mac and is never saved. Corrections: when you fix a name MuskFlow typed, it adds your spelling to the dictionary.')),
         $('div', { class: 'card' }, $('h3', {}, 'Models'), tierSeg, $('div', { class: 'kv', style: 'margin-top:12px' },
           $('div', { class: 'k' }, 'Speech'), $('div', {}, s.speech),
           $('div', { class: 'k' }, 'Cleanup'), $('div', {}, s.cleanup)),

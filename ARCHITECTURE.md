@@ -249,6 +249,13 @@ Score them by recency (closer to caret is better) and frequency. Keep the top 30
 
 **Built (v1, `mf-context`):** on Fn-down MuskFlow reads the frontmost app and, through Accessibility, its focused window's title (so a browser tab is recognised as Gmail, ChatGPT, Claude…). It picks AI prompt for AI apps and terminals, Formal for mail, Teams, LinkedIn and Docs, Casual for Slack, WhatsApp, Messages and Discord, and Clean elsewhere. The user can fix one style in Settings. Rewriting styles are checked by `guard::check_rewrite`: names and numbers the speaker didn't say, dropped names, padding and answering-instead-of-rewriting all fall back to Clean. Lite keeps rewriting styles at Clean until its fine-tune learns them.
 
+**Built (v2):** `mf_context::screen` reads the focused field's selection and text before the cursor (AXSelectedText, AXValue + AXSelectedTextRange) and walks the focused window's AX tree for visible text, capped at 4,000 nodes, 300 ms and 4,000 characters, most recent last. Electron and Chromium apps are asked to build their tree with `AXManualAccessibility`. It runs on a thread while the user speaks, so it adds no latency. It's used three ways:
+- **Names:** capitalised words away from a sentence start become extra dictionary terms for this dictation. They only fix misspellings, never re-case a word ("mark" stays a verb).
+- **Tone:** casual or formal markers in the recent text override a chat app's default.
+- **Command mode:** the context for Fn + Control (`mf_cleanup::command`). Selection → replacement; no selection → new text at the cursor. Base models get three worked examples; MuskFlow fine-tunes from round 3 learned the prompt.
+
+**Learning from corrections (built):** after typing, the field is read again at 10 s, 30 s and 90 s, and before the next dictation. A word-level alignment finds 1:1 swaps where the new spelling is one the dictionary would match the old word to ("Pria" → "Priya"). Those are appended to the dictionary under "# Learned from your corrections".
+
 **Tone follows the conversation, not just the app:** the profile picks a default (Gmail, Teams → formal), and the last few messages of the open chat (via the context engine) adjust it: the same Teams app is formal with a manager and casual in a chat with a friend.
 
 **Model sizes per mode:** Clean runs on every tier. Command mode writes new text, which an 0.8B model does poorly, so it uses the Standard/Max LLM locally or a bring-your-own endpoint the user picks; Lite users are told so.

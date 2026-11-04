@@ -6,6 +6,7 @@
 //! dropped too much of what they did, we fall back to the rules-only text.
 //! Trust beats polish.
 
+pub mod command;
 pub mod dictionary;
 pub mod guard;
 pub mod rules;
@@ -236,6 +237,19 @@ impl Cleaner {
 
     pub fn llm(&self) -> &Llm {
         &self.llm
+    }
+
+    pub fn dictionary(&self) -> &Dictionary {
+        &self.dictionary
+    }
+
+    /// Command mode: carries out a spoken instruction on the selection or at the cursor.
+    /// The instruction gets the same dictionary and filler cleanup as dictation first.
+    pub fn command(&self, raw: &str, cx: &command::Context) -> Result<command::Commanded> {
+        let instruction = rules::clean(&self.dictionary.apply(raw));
+        let mut out = command::run(&self.llm, &instruction, cx)?;
+        out.text = self.dictionary.apply(&out.text);
+        Ok(out)
     }
 
     pub fn clean(&self, raw: &str) -> Result<Cleaned> {

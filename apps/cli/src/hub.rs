@@ -100,6 +100,8 @@ impl Hub {
                 "speech": self.tier.asr_label(),
                 "cleanup": self.tier.llm_label(),
                 "login": mf_shell::launch_at_login(),
+                "screen_context": self.settings.screen_context(),
+                "learning": self.settings.learning(),
                 "input_monitoring": mf_hotkey::has_permission(),
                 "accessibility": mf_insert::has_permission(),
                 "dictionary": self.dictionary.display().to_string(),
@@ -179,6 +181,16 @@ impl Hub {
             "restart" => {
                 restart();
                 json!(true)
+            }
+            "set_screen_context" => {
+                self.settings
+                    .set_screen_context(args["on"].as_bool().unwrap_or(true))?;
+                json!(self.settings.screen_context())
+            }
+            "set_learning" => {
+                self.settings
+                    .set_learning(args["on"].as_bool().unwrap_or(true))?;
+                json!(self.settings.learning())
             }
             "set_login" => {
                 mf_shell::set_launch_at_login(args["on"].as_bool().unwrap_or(false))?;

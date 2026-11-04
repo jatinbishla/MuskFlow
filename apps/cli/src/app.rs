@@ -5,6 +5,12 @@
 //! "Listening" while Fn is held, and a sound marks start and finish. Models load
 //! once and stay warm; the microphone is open only while Fn is held. The user's
 //! dictionary lives in a plain text file and is picked up as soon as it's saved.
+//!
+//! Fn + Control is command mode: say what to write ("reply saying I'll send it
+//! Friday", or "make this shorter" with text selected). While the user speaks, the
+//! text on screen is read in the background (mf-context): it gives command mode its
+//! context, spells names the way the screen does, and sets the tone. After typing,
+//! the field is watched for a minute and a half so fixed names can be learned.
 
 use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime};
@@ -12,12 +18,13 @@ use std::time::{Instant, SystemTime};
 use anyhow::{Context, Result};
 use mf_audio::samples_to_secs;
 use mf_cleanup::{Cleaner, Style};
-use mf_context::Focus;
+use mf_context::{Focus, Screen};
 use mf_hotkey::{Event, Mode};
 use mf_models::Tier;
 use mf_shell::{State, Ui};
 
 use crate::history::{Entry, History};
+use crate::learn::{self, Pending};
 use crate::settings::Settings;
 use crate::{
     Common, asr_dir, dictionary, llm_path, load_cleaner, load_engine, load_vad, ms, record,
@@ -115,10 +122,17 @@ pub fn run(c: &Common, device: Option<&str>) -> Result<()> {
 
 /// The style for this dictation: the user's fixed choice, or the one the focused app calls
 /// for. Lite's 0.8B model can't rewrite safely yet, so it keeps rewriting styles to Clean.
-fn pick_style(c: &Common, settings: &Settings, focus: Option<&Focus>) -> Style {
-    let style = settings
-        .style()
-        .unwrap_or_else(|| focus.map(Focus::style).unwrap_or_default());
+fn pick_style(
+    c: &Common,
+    settings: &Settings,
+    focus: Option<&Focus>,
+    screen: Option<&Screen>,
+) -> Style {
+    let style = settings.style().unwrap_or_else(|| match (focus, screen) {
+        (Some(f), Some(sc)) => f.style_for(sc),
+        (Some(f), None) => f.style(),
+        _ => Style::default(),
+    });
     if c.tier == Tier::Lite && style.rewrites() {
         Style::Clean
     } else {
@@ -154,13 +168,40 @@ fn dictate_loop(c: &Common, device: Option<&str>, settings: &Settings, ui: &Ui) 
     let history = History::new(History::default_path());
     ui.set(State::Ready);
 
+    let mut pending: Option<Pending> = None;
+
     loop {
-        let Event::Down(mode) = events.recv()? else {
+        // Between dictations, look back at the last one for corrections when a check is due.
+        let event = match pending.as_ref().and_then(Pending::next_check) {
+            Some(due) => match events.recv_timeout(due.saturating_duration_since(Instant::now())) {
+                Ok(ev) => Some(ev),
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => None,
+                Err(e) => return Err(e.into()),
+            },
+            None => Some(events.recv()?),
+        };
+        let Some(Event::Down(mode)) = event else {
+            if event.is_none() {
+                check_corrections(&mut pending, &mut dict, &dict_path, ui);
+            }
             continue;
         };
+        // Last chance to see the user's fixes before they move on.
+        if pending.is_some() {
+            check_corrections(&mut pending, &mut dict, &dict_path, ui);
+            pending = None;
+        }
         // Where the text will go, read now, while that app is still in front.
         let focus = mf_context::focused();
-        let style = pick_style(c, settings, focus.as_ref());
+        // The text on screen, read while the user speaks.
+        let screen_reader = focus
+            .as_ref()
+            .filter(|_| settings.screen_context() || mode == Mode::Command)
+            .map(|f| {
+                let pid = f.pid;
+                std::thread::spawn(move || mf_context::screen(pid))
+            });
+        let style = pick_style(c, settings, focus.as_ref(), None);
         ui.set(State::Listening {
             command: mode == Mode::Command,
             style: style.label().into(),
@@ -212,9 +253,7 @@ fn dictate_loop(c: &Common, device: Option<&str>, settings: &Settings, ui: &Ui) 
             ui.set(State::Nothing("No speech heard".into()));
             continue;
         }
-        if final_mode == Mode::Command {
-            eprint!("(command mode isn't built yet; typing it as dictation) ");
-        }
+        let screen = screen_reader.and_then(|r| r.join().ok());
 
         // Pick up dictionary edits without a restart.
         let stamp = modified(&dict_path);
@@ -233,6 +272,39 @@ fn dictate_loop(c: &Common, device: Option<&str>, settings: &Settings, ui: &Ui) 
         }
 
         let raw = rec.hyp.text();
+        if final_mode == Mode::Command {
+            let Some(cl) = cleaner.as_ref() else {
+                ui.set(State::Error(format!(
+                    "Command mode needs the {} tier's language model: muskflow models install {}",
+                    c.tier, c.tier
+                )));
+                continue;
+            };
+            let screen = screen.unwrap_or_default();
+            run_command(
+                cl,
+                &raw,
+                &screen,
+                focus.as_ref(),
+                settings,
+                &history,
+                spoke,
+                &rec.stopped,
+                ui,
+            );
+            continue;
+        }
+        let screen = screen.filter(|_| settings.screen_context());
+        let style = pick_style(c, settings, focus.as_ref(), screen.as_ref());
+        // Names on screen ("Priya" in the email thread) spell the words that sound like them.
+        if let Some(cl) = cleaner.as_mut() {
+            match &screen {
+                Some(sc) => cl.set_dictionary(
+                    dict.with_screen_terms(mf_context::text::names(&sc.all_text())),
+                ),
+                None => cl.set_dictionary(dict.clone()),
+            }
+        }
         let t = Instant::now();
         let text = match &cleaner {
             Some(cl) => match cl.clean_as(&raw, style) {
@@ -273,6 +345,16 @@ fn dictate_loop(c: &Common, device: Option<&str>, settings: &Settings, ui: &Ui) 
                     log::warn!("could not save history: {e:#}");
                 }
                 ui.set(State::Typed);
+                if settings.learning()
+                    && let Some(f) = &focus
+                {
+                    pending = Some(Pending {
+                        pid: f.pid,
+                        typed: text.clone(),
+                        at: Instant::now(),
+                        checks: 0,
+                    });
+                }
                 eprintln!(
                     "→ typed in {} (speech {} + cleanup {}) · spoke {spoke:.1}s\n  {text}",
                     ms(rec.stopped.elapsed()),
@@ -286,6 +368,131 @@ fn dictate_loop(c: &Common, device: Option<&str>, settings: &Settings, ui: &Ui) 
             }
         }
     }
+}
+
+/// Fn + Control: carries out the spoken instruction and types (or replaces the selection
+/// with) the result.
+#[allow(clippy::too_many_arguments)]
+fn run_command(
+    cleaner: &Cleaner,
+    raw: &str,
+    screen: &Screen,
+    focus: Option<&Focus>,
+    settings: &Settings,
+    history: &History,
+    spoke: f32,
+    stopped: &Instant,
+    ui: &Ui,
+) {
+    // Apps that don't expose their text field: ask them for the selection with ⌘C.
+    let copied = if screen.selection.is_none() && !screen.readable {
+        mf_insert::copy_selection()
+    } else {
+        None
+    };
+    let selection = screen.selection.as_deref().or(copied.as_deref());
+    let app = focus.map(Focus::label);
+    // Only the tone matters here, so Lite keeps the destination's real style.
+    let style = settings
+        .style()
+        .unwrap_or_else(|| focus.map(|f| f.style_for(screen)).unwrap_or_default());
+    let cx = mf_cleanup::command::Context {
+        app: app.as_deref(),
+        style,
+        selection,
+        before: &screen.before,
+        window: &screen.window,
+    };
+    let out = match cleaner.command(raw, &cx) {
+        Ok(out) if !out.text.is_empty() => out,
+        Ok(_) => {
+            eprintln!("→ command gave nothing to type");
+            ui.set(State::Nothing("Nothing to write".into()));
+            return;
+        }
+        Err(e) => {
+            eprintln!("→ command failed: {e:#}");
+            ui.set(State::Error(format!("{e:#}")));
+            return;
+        }
+    };
+    // Replacing a selection: paste over it. New text: paste at the cursor.
+    if let Err(e) = mf_insert::insert(&out.text) {
+        eprintln!("→ {e:#}\n  {}", out.text);
+        ui.set(State::Error(format!("{e:#}")));
+        return;
+    }
+    let entry = Entry {
+        at: History::now_ms(),
+        text: out.text.clone(),
+        raw: raw.to_string(),
+        app,
+        style: Some(style.name().into()),
+        mode: "command".into(),
+        spoke_secs: spoke,
+        latency_ms: stopped.elapsed().as_millis() as u32,
+    };
+    if let Err(e) = history.append(&entry) {
+        log::warn!("could not save history: {e:#}");
+    }
+    ui.set(State::Typed);
+    eprintln!(
+        "→ command ({}) done in {} · {} chars of screen context\n  {}",
+        if out.replaces_selection {
+            "replaced selection"
+        } else {
+            "inserted"
+        },
+        ms(stopped.elapsed()),
+        screen.window.len() + screen.before.len(),
+        out.text
+    );
+}
+
+/// Looks at the field MuskFlow last typed into; words the user fixed go into the dictionary.
+fn check_corrections(
+    pending: &mut Option<Pending>,
+    dict: &mut mf_cleanup::Dictionary,
+    path: &Path,
+    ui: &Ui,
+) {
+    let Some(p) = pending.as_mut() else {
+        return;
+    };
+    p.checks += 1;
+    let Some(field) = mf_context::field_text(p.pid) else {
+        return;
+    };
+    let words = learn::corrections(&p.typed, &field, dict);
+    if words.is_empty() {
+        if p.next_check().is_none() {
+            *pending = None;
+        }
+        return;
+    }
+    match learn::save(path, &words) {
+        Ok(()) => {
+            // The dictionary file's change is picked up before the next dictation.
+            *dict = mf_cleanup::Dictionary::new(
+                dict.terms().map(String::from).chain(words.iter().cloned()),
+            );
+            eprintln!("· learned from your correction: {}", words.join(", "));
+            ui.set(State::Nothing(format!(
+                "Added {} to your dictionary",
+                quote_list(&words)
+            )));
+        }
+        Err(e) => log::warn!("could not save learned words: {e:#}"),
+    }
+    *pending = None;
+}
+
+fn quote_list(words: &[String]) -> String {
+    words
+        .iter()
+        .map(|w| format!("\u{201c}{w}\u{201d}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn modified(path: &Path) -> Option<SystemTime> {
