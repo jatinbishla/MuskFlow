@@ -1,4 +1,4 @@
-//! `muskflow bench`: every clip through every tier, side by side.
+//! `umless bench`: every clip through every tier, side by side.
 //!
 //! The product bar is that Lite is as accurate as Max, so the report leads with
 //! the accuracy gap between tiers, not just each tier's own numbers. Two stages
@@ -10,10 +10,10 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use mf_audio::load_wav_16k;
-use mf_cleanup::Cleaned;
-use mf_eval::{Wer, wer};
-use mf_models::{Tier, dir_size};
+use umless_audio::load_wav_16k;
+use umless_cleanup::Cleaned;
+use umless_eval::{Wer, wer};
+use umless_models::{Tier, dir_size};
 
 use crate::{Common, Replay, dictionary, llm_path, load_cleaner, load_engine, replay};
 
@@ -84,7 +84,7 @@ pub fn run(
     let mut runs = Vec::new();
     for tier in tiers {
         if !tier.asr_path(&c.models).is_dir() {
-            eprintln!("· {tier}: not installed, skipping (muskflow models install {tier})");
+            eprintln!("· {tier}: not installed, skipping (umless models install {tier})");
             continue;
         }
         let t = Instant::now();
@@ -108,10 +108,12 @@ pub fn run(
                 (Some(cd), Some(reference)) => Some(wer(reference, &cd.text)),
                 _ => None,
             };
-            let rules_wer = clip
-                .clean
-                .as_ref()
-                .map(|reference| wer(reference, &mf_cleanup::rules::clean(&dict.apply(&asr.text))));
+            let rules_wer = clip.clean.as_ref().map(|reference| {
+                wer(
+                    reference,
+                    &umless_cleanup::rules::clean(&dict.apply(&asr.text)),
+                )
+            });
             let r = ClipResult {
                 asr,
                 asr_wer,
@@ -142,7 +144,7 @@ pub fn run(
         });
     }
     if runs.is_empty() {
-        bail!("no tiers installed; run: muskflow models install all");
+        bail!("no tiers installed; run: umless models install all");
     }
 
     let report = render(&clips, &runs, fast, show);
@@ -263,7 +265,7 @@ fn render(clips: &[Clip], runs: &[TierRun], fast: bool, show: bool) -> String {
             .filter(|x| {
                 x.cleaned
                     .as_ref()
-                    .is_some_and(|c| c.path == mf_cleanup::Path::Fallback)
+                    .is_some_and(|c| c.path == umless_cleanup::Path::Fallback)
             })
             .count();
         let audio: f32 = r.results.iter().map(|x| x.asr.audio_secs).sum();
@@ -336,9 +338,9 @@ fn render(clips: &[Clip], runs: &[TierRun], fast: bool, show: bool) -> String {
                 let _ = writeln!(s, "- {} ASR: {}", r.tier, x.asr.text);
                 if let Some(cd) = &x.cleaned {
                     let tag = match cd.path {
-                        mf_cleanup::Path::Rules => "rules".to_string(),
-                        mf_cleanup::Path::Llm => "llm".to_string(),
-                        mf_cleanup::Path::Fallback => format!(
+                        umless_cleanup::Path::Rules => "rules".to_string(),
+                        umless_cleanup::Path::Llm => "llm".to_string(),
+                        umless_cleanup::Path::Fallback => format!(
                             "fallback: {}; llm said \"{}\"",
                             cd.verdict.as_ref().and_then(|v| v.reason).unwrap_or("?"),
                             cd.llm_text.as_deref().unwrap_or("")

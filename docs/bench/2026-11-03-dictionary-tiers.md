@@ -1,6 +1,6 @@
 # Dictionary (hotwords): all tiers, 2026-11-03
 
-`muskflow bench --tiers lite,standard,max --fast --show --dictionary bench/dictionary.txt` on the 11 synthetic clips. Without the dictionary, final WER was 10.5% / 7.2% / 4.2% (Lite / Standard / Max).
+`umless bench --tiers lite,standard,max --fast --show --dictionary bench/dictionary.txt` on the 11 synthetic clips. Without the dictionary, final WER was 10.5% / 7.2% / 4.2% (Lite / Standard / Max).
 
 ## Tier comparison (fast replay)
 

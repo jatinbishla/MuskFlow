@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Creates a self-signed code-signing certificate, "MuskFlow Local Signing", in your login
+# Creates a self-signed code-signing certificate, "Umless Local Signing", in your login
 # keychain. scripts/make-app.sh signs with it when it exists, so macOS recognises every
 # rebuild as the same app and keeps its Input Monitoring and Accessibility permissions.
 #
-# It stays on this Mac and is only good for running your own builds. To ship MuskFlow
+# It stays on this Mac and is only good for running your own builds. To ship Umless
 # to other people, sign with an Apple Developer ID instead.
 #
-# Remove it any time: Keychain Access → login → My Certificates → MuskFlow Local Signing → Delete.
+# Remove it any time: Keychain Access → login → My Certificates → Umless Local Signing → Delete.
 set -euo pipefail
 
-NAME="MuskFlow Local Signing"
+NAME="Umless Local Signing"
 KEYCHAIN="$HOME/Library/Keychains/login.keychain-db"
 
 if security find-certificate -c "$NAME" "$KEYCHAIN" >/dev/null 2>&1; then

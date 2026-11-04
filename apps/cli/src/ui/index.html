@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MuskFlow</title>
+<title>Umless</title>
 <style>
   :root {
     --bg: #f6f6f4; --panel: #ffffff; --side: #efeeeb; --text: #1c1c1e; --muted: #6e6e73;
@@ -119,7 +119,7 @@
     <svg width="22" height="22" viewBox="0 0 18 18" aria-hidden="true">
       <g fill="currentColor"><rect x="1.3" y="1.5" width="2.4" height="15" rx="1.2"/><rect x="4.8" y="1.5" width="2.4" height="8" rx="1.2"/><rect x="8.3" y="1.5" width="2.4" height="12" rx="1.2"/><rect x="11.8" y="1.5" width="2.4" height="8" rx="1.2"/><rect x="15.3" y="1.5" width="2.4" height="15" rx="1.2"/></g>
     </svg>
-    MuskFlow
+    Umless
   </div>
   <button data-page="setup" id="nav-setup" hidden>Setup</button>
   <button data-page="home" class="on">Home</button>
@@ -132,13 +132,13 @@
 <main id="main"></main>
 <div class="toast" id="toast"></div>
 <script>
-window.mf = {
+window.umless = {
   _n: 0, _pending: {},
   call(cmd, args = {}) {
     const id = ++this._n;
     return new Promise((resolve, reject) => {
       this._pending[id] = { resolve, reject };
-      window.webkit.messageHandlers.mf.postMessage(JSON.stringify({ id, cmd, args }));
+      window.webkit.messageHandlers.umless.postMessage(JSON.stringify({ id, cmd, args }));
     });
   },
   _reply(r) {
@@ -200,9 +200,9 @@ function entryRow(e, { actions = true } = {}) {
     $('div', { class: 'body' }, $('div', { class: 'text' }, e.text), meta, heard));
   if (actions) {
     row.append($('div', { class: 'actions' },
-      $('button', { class: 'btn', onclick: async () => { await mf.call('copy', { text: e.text }); toast('Copied'); } }, 'Copy'),
+      $('button', { class: 'btn', onclick: async () => { await umless.call('copy', { text: e.text }); toast('Copied'); } }, 'Copy'),
       e.raw !== e.text ? $('button', { class: 'btn', onclick: () => { heard.hidden = !heard.hidden; } }, 'Heard') : null,
-      $('button', { class: 'btn danger', onclick: async () => { await mf.call('delete', { at: e.at }); row.remove(); } }, 'Delete')));
+      $('button', { class: 'btn danger', onclick: async () => { await umless.call('delete', { at: e.at }); row.remove(); } }, 'Delete')));
   }
   return row;
 }
@@ -210,23 +210,23 @@ function entryRow(e, { actions = true } = {}) {
 let setupTimer = null, triedIt = false;
 const pages = {
   async setup() {
-    const s = await mf.call('setup');
+    const s = await umless.call('setup');
     const fnOk = s.fn_key === 'nothing';
     const steps = [
-      { done: s.mic === 'granted', title: 'Microphone', why: 'So MuskFlow can hear you while you hold fn.',
+      { done: s.mic === 'granted', title: 'Microphone', why: 'So Umless can hear you while you hold fn.',
         action: s.mic === 'denied'
-          ? ['Open Microphone settings', () => mf.call('request', { what: 'mic_settings' })]
-          : ['Allow', () => mf.call('request', { what: 'mic' })],
-        more: s.mic === 'denied' ? 'macOS remembers a "Don\'t Allow". Turn MuskFlow on in the list that opens.' : null },
-      { done: s.accessibility, title: 'Accessibility', why: 'So MuskFlow can type the text where your cursor is.',
-        action: ['Allow', () => mf.call('request', { what: 'accessibility' })],
-        more: 'In the list that opens, turn on MuskFlow.', reset: 'accessibility' },
-      { done: s.input_monitoring, title: 'Input Monitoring', why: 'So MuskFlow can see when you hold the fn key.',
-        action: ['Allow', () => mf.call('request', { what: 'input_monitoring' })],
-        more: 'Turn on MuskFlow, then restart it. macOS applies this one only after a restart.',
+          ? ['Open Microphone settings', () => umless.call('request', { what: 'mic_settings' })]
+          : ['Allow', () => umless.call('request', { what: 'mic' })],
+        more: s.mic === 'denied' ? 'macOS remembers a "Don\'t Allow". Turn Umless on in the list that opens.' : null },
+      { done: s.accessibility, title: 'Accessibility', why: 'So Umless can type the text where your cursor is.',
+        action: ['Allow', () => umless.call('request', { what: 'accessibility' })],
+        more: 'In the list that opens, turn on Umless.', reset: 'accessibility' },
+      { done: s.input_monitoring, title: 'Input Monitoring', why: 'So Umless can see when you hold the fn key.',
+        action: ['Allow', () => umless.call('request', { what: 'input_monitoring' })],
+        more: 'Turn on Umless, then restart it. macOS applies this one only after a restart.',
         restart: true, reset: 'input_monitoring' },
       { done: fnOk, title: 'Make fn do nothing else', why: 'Set "Press 🌐 key to" to "Do Nothing", so fn doesn\'t also open the emoji picker.',
-        action: ['Open Keyboard settings', () => mf.call('request', { what: 'keyboard' })] },
+        action: ['Open Keyboard settings', () => umless.call('request', { what: 'keyboard' })] },
     ];
     const needed = steps.filter(x => !x.done).length;
     const done = steps.length - needed + (triedIt ? 1 : 0);
@@ -235,10 +235,10 @@ const pages = {
     steps.forEach((st, i) => {
       const more = $('div', { class: 'more' });
       if (!st.done && st.more) more.append(st.more);
-      if (!st.done && st.restart) more.append($('button', { class: 'btn', onclick: () => mf.call('restart') }, 'Restart MuskFlow'));
-      if (!st.done && st.reset) more.append($('button', { class: 'btn', title: 'For an entry left over from an older MuskFlow build', onclick: async () => {
-        await mf.call('reset_permission', { what: st.reset }); await mf.call('request', { what: st.reset });
-        toast('Old entry cleared. Turn MuskFlow on again.');
+      if (!st.done && st.restart) more.append($('button', { class: 'btn', onclick: () => umless.call('restart') }, 'Restart Umless'));
+      if (!st.done && st.reset) more.append($('button', { class: 'btn', title: 'For an entry left over from an older Umless build', onclick: async () => {
+        await umless.call('reset_permission', { what: st.reset }); await umless.call('request', { what: st.reset });
+        toast('Old entry cleared. Turn Umless on again.');
       } }, 'On but still not allowed? Reset'));
       list.append($('div', { class: 'step' + (st.done ? ' done' : '') },
         $('div', { class: 'badge' }, st.done ? '✓' : String(i + 1)),
@@ -246,7 +246,7 @@ const pages = {
         st.done ? null : $('div', { class: 'side' }, $('button', { class: 'btn primary', onclick: st.action[1] }, st.action[0]))));
     });
     const ready = s.done;
-    const box = $('textarea', { placeholder: ready ? 'Click here, hold fn and say "Hello MuskFlow, this is working."' : 'Finish the steps above first.' });
+    const box = $('textarea', { placeholder: ready ? 'Click here, hold fn and say "Hello Umless, this is working."' : 'Finish the steps above first.' });
     if (!ready) box.disabled = true;
     box.addEventListener('input', () => { if (box.value.trim().length > 3 && !triedIt) { triedIt = true; toast('It works 🎉'); show('setup'); } });
     list.append($('div', { class: 'step' + (triedIt ? ' done' : '') },
@@ -258,7 +258,7 @@ const pages = {
     if (!(ready && fnOk && triedIt)) setupTimer = setTimeout(() => { if (page === 'setup' && document.activeElement !== box) show('setup'); }, 1000);
     document.getElementById('nav-setup').hidden = ready && fnOk;
     return [
-      $('h1', {}, needed ? 'Set up MuskFlow' : triedIt ? 'You\'re all set' : 'Almost there'),
+      $('h1', {}, needed ? 'Set up Umless' : triedIt ? 'You\'re all set' : 'Almost there'),
       $('p', { class: 'sub' }, needed
         ? 'macOS asks you to allow a few things once. Each step turns green as soon as it\'s done.'
         : 'Everything is allowed. Try it below, then hold fn anywhere you type.'),
@@ -269,7 +269,7 @@ const pages = {
   },
 
   async home() {
-    const { stats: s, recent } = await mf.call('home');
+    const { stats: s, recent } = await umless.call('home');
     const stat = (n, l) => $('div', { class: 'card stat' }, $('div', { class: 'n' }, n), $('div', { class: 'l' }, l));
     return [
       $('h1', {}, 'Welcome back'),
@@ -288,7 +288,7 @@ const pages = {
   },
 
   async history() {
-    const entries = await mf.call('history');
+    const entries = await umless.call('history');
     const list = $('div');
     const render = q => {
       list.replaceChildren();
@@ -309,26 +309,26 @@ const pages = {
         $('input', { type: 'search', placeholder: 'Search what you said…', oninput: ev => render(ev.target.value) }),
         $('button', { class: 'btn danger', onclick: async () => {
           if (!entries.length || !confirm('Delete all history? This can\'t be undone.')) return;
-          await mf.call('clear'); show('history');
+          await umless.call('clear'); show('history');
         } }, 'Clear all')),
       list,
     ];
   },
 
   async dictionary() {
-    let terms = await mf.call('dictionary');
+    let terms = await umless.call('dictionary');
     const chips = $('div', { class: 'chips' });
     const render = () => {
       chips.replaceChildren();
       if (!terms.length) chips.append($('div', { class: 'empty', style: 'width:100%' }, 'Add names, products and jargon you say often.'));
       for (const t of terms) chips.append($('div', { class: 'chip' }, t,
-        $('button', { title: 'Remove', onclick: async () => { terms = await mf.call('dict_remove', { term: t }); render(); } }, '×')));
+        $('button', { title: 'Remove', onclick: async () => { terms = await umless.call('dict_remove', { term: t }); render(); } }, '×')));
     };
     const input = $('input', { type: 'text', placeholder: 'e.g. SubFlo, Jatin Bishla, lien waivers' });
     const add = async () => {
       const term = input.value.trim();
       if (!term) return;
-      try { terms = await mf.call('dict_add', { term }); input.value = ''; render(); toast(`Added "${term}"`); }
+      try { terms = await umless.call('dict_add', { term }); input.value = ''; render(); toast(`Added "${term}"`); }
       catch (err) { toast(err.message); }
     };
     input.addEventListener('keydown', ev => { if (ev.key === 'Enter') add(); });
@@ -336,23 +336,23 @@ const pages = {
     setTimeout(() => input.focus(), 0);
     return [
       $('h1', {}, 'Dictionary'),
-      $('p', { class: 'sub' }, 'Words MuskFlow should always spell your way. If the speech model hears "Subflow", it types "SubFlo". Changes apply to your next dictation.'),
+      $('p', { class: 'sub' }, 'Words Umless should always spell your way. If the speech model hears "Subflow", it types "SubFlo". Changes apply to your next dictation.'),
       $('div', { class: 'toolbar' }, input, $('button', { class: 'btn primary', onclick: add }, 'Add')),
       chips,
     ];
   },
 
   async settings() {
-    const s = await mf.call('settings');
-    const st = await mf.call('style');
-    const tiers = await mf.call('tiers');
+    const s = await umless.call('settings');
+    const st = await umless.call('style');
+    const tiers = await umless.call('tiers');
     const tierSeg = $('div', { class: 'seg' });
     for (const t of tiers) {
       const b = $('button', { class: t.current ? 'on' : '', title: t.installed ? `${t.speech} + ${t.cleanup}` : 'Not downloaded' },
         t.name[0].toUpperCase() + t.name.slice(1) + (t.installed ? '' : ' ↓'));
       b.addEventListener('click', async () => {
         if (t.current) return;
-        try { toast(`Switching to ${t.name}…`); await mf.call('set_tier', { tier: t.name }); }
+        try { toast(`Switching to ${t.name}…`); await umless.call('set_tier', { tier: t.name }); }
         catch (err) { toast(err.message); }
       });
       tierSeg.append(b);
@@ -361,7 +361,7 @@ const pages = {
     for (const [key, label] of Object.entries(STYLE_LABELS)) {
       const b = $('button', { class: key === st.current ? 'on' : '' }, label);
       b.addEventListener('click', async () => {
-        await mf.call('set_style', { style: key });
+        await umless.call('set_style', { style: key });
         seg.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b));
         toast(key === 'auto' ? 'Style follows the app you type into' : `Always ${label}`);
       });
@@ -371,13 +371,13 @@ const pages = {
     const toggle = (cmd, on) => {
       const el = $('div', { class: 'switch' + (on ? ' on' : '') });
       el.addEventListener('click', async () => {
-        try { el.classList.toggle('on', await mf.call(cmd, { on: !el.classList.contains('on') })); }
+        try { el.classList.toggle('on', await umless.call(cmd, { on: !el.classList.contains('on') })); }
         catch (err) { toast(err.message); }
       });
       return el;
     };
     const sw = toggle('set_login', s.login);
-    const open = what => $('button', { class: 'btn', onclick: () => mf.call('open', { what }) },
+    const open = what => $('button', { class: 'btn', onclick: () => umless.call('open', { what }) },
       { dictionary: 'Open dictionary file', history: 'Show history file', log: 'Open log', privacy: 'Open Privacy settings' }[what]);
     return [
       $('h1', {}, 'Settings'),
@@ -399,19 +399,19 @@ const pages = {
           $('div', { class: 'k' }, 'Launch at login'), sw,
           $('div', { class: 'k' }, 'Use what\u2019s on screen'), toggle('set_screen_context', s.screen_context),
           $('div', { class: 'k' }, 'Learn from my corrections'), toggle('set_learning', s.learning)),
-          $('p', { class: 'note' }, 'Screen: MuskFlow reads the text around your cursor (the email thread, the chat) to spell names right, match the conversation\u2019s tone, and give command mode context. It stays on this Mac and is never saved. Corrections: when you fix a name MuskFlow typed, it adds your spelling to the dictionary.')),
+          $('p', { class: 'note' }, 'Screen: Umless reads the text around your cursor (the email thread, the chat) to spell names right, match the conversation\u2019s tone, and give command mode context. It stays on this Mac and is never saved. Corrections: when you fix a name Umless typed, it adds your spelling to the dictionary.')),
         $('div', { class: 'card' }, $('h3', {}, 'Models'), tierSeg, $('div', { class: 'kv', style: 'margin-top:12px' },
           $('div', { class: 'k' }, 'Speech'), $('div', {}, s.speech),
           $('div', { class: 'k' }, 'Cleanup'), $('div', {}, s.cleanup)),
-          $('p', { class: 'note' }, 'Lite is fastest and smallest, Max most accurate. Switching restarts MuskFlow. Tiers marked ↓ aren\'t downloaded: run ./install.sh <tier> in the MuskFlow folder.')),
+          $('p', { class: 'note' }, 'Lite is fastest and smallest, Max most accurate. Switching restarts Umless. Tiers marked ↓ aren\'t downloaded: run ./install.sh <tier> in the Umless folder.')),
         $('div', { class: 'card' }, $('h3', {}, 'Permissions'), $('div', { class: 'kv' },
           $('div', { class: 'k' }, 'Input Monitoring'), yes(s.input_monitoring),
           $('div', { class: 'k' }, 'Accessibility'), yes(s.accessibility)),
-          $('p', { class: 'note' }, 'Input Monitoring lets MuskFlow see the fn key; Accessibility lets it type for you.'),
+          $('p', { class: 'note' }, 'Input Monitoring lets Umless see the fn key; Accessibility lets it type for you.'),
           $('div', { style: 'margin-top:10px' }, open('privacy'))),
         $('div', { class: 'card' }, $('h3', {}, 'Your data'),
           $('div', { style: 'display:flex;gap:8px;flex-wrap:wrap' }, open('dictionary'), open('history'), open('log')),
-          $('p', { class: 'note' }, `MuskFlow ${s.version}`))),
+          $('p', { class: 'note' }, `Umless ${s.version}`))),
     ];
   },
 };
@@ -425,7 +425,7 @@ async function show(name) {
 }
 document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => show(b.dataset.page)));
 // Open on Setup until everything is allowed.
-mf.call('setup').then(s => {
+umless.call('setup').then(s => {
   const pending = !s.done || s.fn_key !== 'nothing';
   document.getElementById('nav-setup').hidden = !pending;
   show(pending ? 'setup' : 'home');

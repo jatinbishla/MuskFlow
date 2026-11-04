@@ -1,12 +1,12 @@
-//! The user's choices from the MuskFlow window, in
-//! `~/Library/Application Support/MuskFlow/settings.json`.
+//! The user's choices from the Umless window, in
+//! `~/Library/Application Support/Umless/settings.json`.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
-use mf_cleanup::Style;
-use mf_models::Tier;
 use serde::{Deserialize, Serialize};
+use umless_cleanup::Style;
+use umless_models::Tier;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct Data {
@@ -36,7 +36,7 @@ impl Settings {
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .unwrap_or_default();
-        let path = home.join("Library/Application Support/MuskFlow/settings.json");
+        let path = home.join("Library/Application Support/Umless/settings.json");
         let data = std::fs::read_to_string(&path)
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())

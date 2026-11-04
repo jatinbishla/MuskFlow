@@ -10,14 +10,14 @@ tags:
 - speech-to-text
 - text-cleanup
 - disfluency-removal
-- muskflow
+- umless
 - gguf
 - llama.cpp
 ---
 
-# MuskFlow Lite Cleanup 0.8B (GGUF)
+# Umless Lite Cleanup 0.8B (GGUF)
 
-**Raw dictation in, the text you meant out.** This is the cleanup model behind the Lite tier of [MuskFlow](https://github.com/jatinbishla/MuskFlow), an open-source, fully local voice-typing app. It is Qwen3.5-0.8B fine-tuned for one job:
+**Raw dictation in, the text you meant out.** This is the cleanup model behind the Lite tier of [Umless](https://github.com/jatinbishla/Umless), an open-source, fully local voice-typing app. It is Qwen3.5-0.8B fine-tuned for one job:
 
 | Speech recognizer heard | Model writes |
 |---|---|
@@ -29,7 +29,7 @@ It removes fillers (including the ones a speech recognizer mishears as words, li
 
 ## Use
 
-You don't need to download this file yourself: `./install.sh lite` in MuskFlow fetches it. To run it standalone with llama.cpp, use this prompt format. It is the exact format the model was trained on; other formats will work worse.
+You don't need to download this file yourself: `./install.sh lite` in Umless fetches it. To run it standalone with llama.cpp, use this prompt format. It is the exact format the model was trained on; other formats will work worse.
 
 ```
 <|im_start|>system
@@ -50,12 +50,12 @@ The whole prompt is about 40 tokens. The base model needs a ~600-token few-shot 
 
 ## Results
 
-These come from MuskFlow's benchmark (`muskflow bench`): the same 11 speech clips go through each tier's speech recognizer, then its cleanup model, and the output is scored against what the speaker meant. "WER" is word error rate; lower is better.
+These come from Umless's benchmark (`umless bench`): the same 11 speech clips go through each tier's speech recognizer, then its cleanup model, and the output is scored against what the speaker meant. "WER" is word error rate; lower is better.
 
 | Tier | Cleanup model | Final WER | Cleanup time (p50) |
 |---|---|---|---|
 | Lite, before | Qwen3.5-0.8B, few-shot prompt | 6.6% | 563 ms |
-| **Lite, this model** | **MuskFlow Lite Cleanup 0.8B** | _TBD_ | _TBD_ |
+| **Lite, this model** | **Umless Lite Cleanup 0.8B** | _TBD_ | _TBD_ |
 | Standard | Qwen3.5-2B, few-shot prompt | 3.6% | 1,169 ms |
 | Max | Qwen3-4B-Instruct-2507, few-shot prompt | 1.5% | 979 ms |
 
@@ -70,14 +70,14 @@ The benchmark clips and their sentences were held out of training (see below). M
   2. A script turns each clean message into what a person *says*: fillers, stammers, and self-corrections in three styles (inline, "make that…", and restart).
   3. The script then adds the mistakes a small speech recognizer makes on that speech: fillers misheard as short words, numbers spoken as words, corrections split across sentences ("Thursday? No. Wait, Friday"), and punctuation guesses.
   4. The clean message is the target, so labels are exact. Names are never misspelled in the input, so the model doesn't learn to invent words it didn't hear.
-- **Held out:** any message sharing a 5-word sequence with MuskFlow's benchmark clips or reading passages was dropped.
-- **Code:** the full pipeline is in [`finetune/lite_cleanup.py`](https://github.com/jatinbishla/MuskFlow/blob/main/finetune/lite_cleanup.py), and the [Colab notebook](https://github.com/jatinbishla/MuskFlow/blob/main/finetune/MuskFlow_Lite_finetune.ipynb) reproduces it end to end.
+- **Held out:** any message sharing a 5-word sequence with Umless's benchmark clips or reading passages was dropped.
+- **Code:** the full pipeline is in [`finetune/lite_cleanup.py`](https://github.com/jatinbishla/Umless/blob/main/finetune/lite_cleanup.py), and the [Colab notebook](https://github.com/jatinbishla/Umless/blob/main/finetune/Umless_Lite_finetune.ipynb) reproduces it end to end.
 
 ## Limitations
 
 - **English only.** Hinglish and other languages are not trained yet.
-- **Cleanup only.** It does not change tone, summarize or write new text. Those are separate MuskFlow modes that use larger models.
-- **It can over-delete.** A real short word that looks like a misheard filler ("and", "on", "a") is occasionally removed. MuskFlow runs a faithfulness check on every output, and if the model drops or adds content the speaker didn't say, MuskFlow falls back to rule-based cleanup.
+- **Cleanup only.** It does not change tone, summarize or write new text. Those are separate Umless modes that use larger models.
+- **It can over-delete.** A real short word that looks like a misheard filler ("and", "on", "a") is occasionally removed. Umless runs a faithfulness check on every output, and if the model drops or adds content the speaker didn't say, Umless falls back to rule-based cleanup.
 - **The training speech is synthetic.** Real accents and noisy rooms produce mistakes the noise model doesn't cover. Later versions will add real, consented recordings.
 
 ## License

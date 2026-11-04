@@ -6,19 +6,19 @@ members = ["crates/*", "apps/cli"]
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
-repository = "https://github.com/jatinbishla/MuskFlow"
+repository = "https://github.com/jatinbishla/Umless"
 
 [workspace.dependencies]
-mf-audio = { path = "crates/mf-audio" }
-mf-asr = { path = "crates/mf-asr" }
-mf-eval = { path = "crates/mf-eval" }
-mf-models = { path = "crates/mf-models" }
-mf-llm = { path = "crates/mf-llm" }
-mf-cleanup = { path = "crates/mf-cleanup" }
-mf-hotkey = { path = "crates/mf-hotkey" }
-mf-insert = { path = "crates/mf-insert" }
-mf-shell = { path = "crates/mf-shell" }
-mf-context = { path = "crates/mf-context" }
+umless-audio = { path = "crates/umless-audio" }
+umless-asr = { path = "crates/umless-asr" }
+umless-eval = { path = "crates/umless-eval" }
+umless-models = { path = "crates/umless-models" }
+umless-llm = { path = "crates/umless-llm" }
+umless-cleanup = { path = "crates/umless-cleanup" }
+umless-hotkey = { path = "crates/umless-hotkey" }
+umless-insert = { path = "crates/umless-insert" }
+umless-shell = { path = "crates/umless-shell" }
+umless-context = { path = "crates/umless-context" }
 anyhow = "1.0"
 thiserror = "2"
 cpal = "0.18"

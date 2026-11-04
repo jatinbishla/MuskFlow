@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# MuskFlow installer: builds the app, downloads the model tiers you choose and, on a Mac,
-# installs and opens MuskFlow.app. Everything comes through this one script; there's
+# Umless installer: builds the app, downloads the model tiers you choose and, on a Mac,
+# installs and opens Umless.app. Everything comes through this one script; there's
 # nothing else to clone or download.
 #
 #   ./install.sh                 # asks which tier, recommending one for this machine
@@ -15,7 +15,7 @@ for dir in "$HOME/.cargo/bin" /opt/homebrew/opt/rustup/bin /usr/local/opt/rustup
   [ -x "$dir/cargo" ] && PATH="$dir:$PATH"
 done
 if ! command -v cargo >/dev/null; then
-  say "MuskFlow is built with Rust, which isn't installed."
+  say "Umless is built with Rust, which isn't installed."
   read -r -p "Install it now with rustup (https://rustup.rs)? [Y/n] " yn
   case "${yn:-y}" in
     [Yy]*) curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
@@ -26,7 +26,7 @@ fi
 
 # ── 1b. C/C++ build tools (llama.cpp is compiled from source) ────────────────
 if [ "$(uname -s)" = Darwin ] && ! xcode-select -p >/dev/null 2>&1; then
-  say "MuskFlow needs Apple's Command Line Tools (the C compiler). A macOS window will open to install them."
+  say "Umless needs Apple's Command Line Tools (the C compiler). A macOS window will open to install them."
   xcode-select --install 2>/dev/null || true
   echo "When that install finishes, run ./install.sh again."
   exit 1
@@ -69,7 +69,7 @@ if [ ${#TIERS[@]} -eq 0 ]; then
   echo "  1) lite      ~650 MB  fastest, any laptop (English)"
   echo "  2) standard  ~1.8 GB  best balance (25 European languages)"
   echo "  3) max       ~3.1 GB  most accurate, 99 languages incl. Hindi; needs a fast GPU/Apple Silicon to feel instant"
-  echo "  4) all       ~5.5 GB  all three (to compare them with \`muskflow bench\`)"
+  echo "  4) all       ~5.5 GB  all three (to compare them with \`umless bench\`)"
   read -r -p "Choose 1-4 [$REC]: " choice
   case "${choice:-}" in
     1) TIERS=(lite) ;; 2) TIERS=(standard) ;; 3) TIERS=(max) ;; 4) TIERS=(all) ;;
@@ -79,9 +79,9 @@ if [ ${#TIERS[@]} -eq 0 ]; then
 fi
 
 # ── 3. Build ─────────────────────────────────────────────────────────────────
-say "Building MuskFlow (first build takes a few minutes)…"
+say "Building Umless (first build takes a few minutes)…"
 cargo build --release --quiet
-BIN="$PWD/target/release/muskflow"
+BIN="$PWD/target/release/umless"
 
 # ── 4. Models ────────────────────────────────────────────────────────────────
 say "Downloading models: ${TIERS[*]}"
@@ -91,12 +91,12 @@ TIER="${TIERS[0]}"; [ "$TIER" = all ] && TIER=standard
 
 # ── 5. The app (macOS) ───────────────────────────────────────────────────────
 if [ "$(uname -s)" = Darwin ]; then
-  say "Installing MuskFlow.app…"
+  say "Installing Umless.app…"
   # A local signing certificate keeps macOS permissions across future updates.
   scripts/make-signing-cert.sh
   scripts/make-app.sh "$TIER"
-  open /Applications/MuskFlow.app
-  say "Done. MuskFlow is open: follow the setup screen (about a minute), then hold fn anywhere to dictate."
+  open /Applications/Umless.app
+  say "Done. Umless is open: follow the setup screen (about a minute), then hold fn anywhere to dictate."
   echo "  It lives in the menu bar. Re-run ./install.sh any time to update; your permissions stay."
 else
   say "Done. Try it:"

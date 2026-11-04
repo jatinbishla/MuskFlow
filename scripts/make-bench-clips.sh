@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Generates the synthetic benchmark set into bench/clips (gitignored): <id>.wav + <id>.txt (reference).
 # Uses macOS `say`, so it only runs on a Mac. Real recordings with hand-written references can be
-# dropped into the same folder (<id>.wav + <id>.txt) and `muskflow bench` will include them.
+# dropped into the same folder (<id>.wav + <id>.txt) and `umless bench` will include them.
 #
 # Format: id|voice|words-per-minute|spoken text|clean text.
 # [[slnc N]] inserts N ms of silence and is not part of the reference.

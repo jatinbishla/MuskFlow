@@ -1,13 +1,13 @@
-//! The MuskFlow window's backend: answers the page's requests (history, stats,
+//! The Umless window's backend: answers the page's requests (history, stats,
 //! dictionary, settings). Runs on the main thread; every call is a quick file read
 //! or write.
 
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
-use mf_models::Tier;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use umless_models::Tier;
 
 use crate::history::{Entry, History};
 use crate::settings::Settings;
@@ -33,7 +33,7 @@ struct Request {
 }
 
 impl Hub {
-    pub fn into_backend(self) -> mf_shell::Backend {
+    pub fn into_backend(self) -> umless_shell::Backend {
         Box::new(move |req: &str| {
             let (id, result) = match serde_json::from_str::<Request>(req) {
                 Ok(r) => (r.id, self.handle(&r.cmd, &r.args)),
@@ -64,7 +64,7 @@ impl Hub {
                 json!(true)
             }
             "copy" => {
-                mf_insert::copy(arg_str(args, "text")?)?;
+                umless_insert::copy(arg_str(args, "text")?)?;
                 json!(true)
             }
             "dictionary" => json!(self.terms()?),
@@ -99,11 +99,11 @@ impl Hub {
                 "tier": self.tier.to_string(),
                 "speech": self.tier.asr_label(),
                 "cleanup": self.tier.llm_label(),
-                "login": mf_shell::launch_at_login(),
+                "login": umless_shell::launch_at_login(),
                 "screen_context": self.settings.screen_context(),
                 "learning": self.settings.learning(),
-                "input_monitoring": mf_hotkey::has_permission(),
-                "accessibility": mf_insert::has_permission(),
+                "input_monitoring": umless_hotkey::has_permission(),
+                "accessibility": umless_insert::has_permission(),
                 "dictionary": self.dictionary.display().to_string(),
                 "history": self.history.display().to_string(),
             }),
@@ -114,7 +114,7 @@ impl Hub {
             "set_style" => {
                 let style = match arg_str(args, "style")? {
                     "auto" => None,
-                    name => Some(name.parse::<mf_cleanup::Style>()?),
+                    name => Some(name.parse::<umless_cleanup::Style>()?),
                 };
                 self.settings.set_style(style)?;
                 json!(true)
@@ -136,7 +136,7 @@ impl Hub {
                 let tier: Tier = arg_str(args, "tier")?.parse()?;
                 if !tier.is_installed(&self.models) {
                     bail!(
-                        "{tier} isn't downloaded yet. Run ./install.sh {tier} in the MuskFlow folder."
+                        "{tier} isn't downloaded yet. Run ./install.sh {tier} in the Umless folder."
                     );
                 }
                 self.settings.set_tier(tier)?;
@@ -145,13 +145,13 @@ impl Hub {
             }
             "request" => {
                 match arg_str(args, "what")? {
-                    "mic" => mf_audio::request_mic_permission(),
+                    "mic" => umless_audio::request_mic_permission(),
                     "accessibility" => {
-                        mf_insert::request_permission();
+                        umless_insert::request_permission();
                         open_settings("Privacy_Accessibility");
                     }
                     "input_monitoring" => {
-                        mf_hotkey::request_permission();
+                        umless_hotkey::request_permission();
                         open_settings("Privacy_ListenEvent");
                     }
                     "mic_settings" => open_settings("Privacy_Microphone"),
@@ -165,7 +165,7 @@ impl Hub {
                 json!(true)
             }
             // Clears a permission entry left from an older build (a different signature), so
-            // macOS asks afresh. Only touches MuskFlow's own entry.
+            // macOS asks afresh. Only touches Umless's own entry.
             "reset_permission" => {
                 let service = match arg_str(args, "what")? {
                     "accessibility" => "Accessibility",
@@ -193,8 +193,8 @@ impl Hub {
                 json!(self.settings.learning())
             }
             "set_login" => {
-                mf_shell::set_launch_at_login(args["on"].as_bool().unwrap_or(false))?;
-                json!(mf_shell::launch_at_login())
+                umless_shell::set_launch_at_login(args["on"].as_bool().unwrap_or(false))?;
+                json!(umless_shell::launch_at_login())
             }
             "open" => {
                 let (flag, path) = match arg_str(args, "what")? {
@@ -231,7 +231,7 @@ impl Hub {
     }
 }
 
-const BUNDLE_ID: &str = "io.github.jatinbishla.muskflow";
+const BUNDLE_ID: &str = "io.github.jatinbishla.umless";
 
 fn open_settings(pane: &str) {
     let _ = std::process::Command::new("open")
@@ -243,13 +243,13 @@ fn open_settings(pane: &str) {
 
 /// Everything the setup screen checks. `done` once dictation can work end to end.
 fn setup_status() -> Value {
-    let mic = match mf_audio::mic_permission() {
-        mf_audio::MicPermission::Granted => "granted",
-        mf_audio::MicPermission::Denied => "denied",
-        mf_audio::MicPermission::NotAsked => "not_asked",
+    let mic = match umless_audio::mic_permission() {
+        umless_audio::MicPermission::Granted => "granted",
+        umless_audio::MicPermission::Denied => "denied",
+        umless_audio::MicPermission::NotAsked => "not_asked",
     };
-    let accessibility = mf_insert::has_permission();
-    let input_monitoring = mf_hotkey::has_permission();
+    let accessibility = umless_insert::has_permission();
+    let input_monitoring = umless_hotkey::has_permission();
     let fn_key = fn_key_action();
     json!({
         "mic": mic,
@@ -279,7 +279,7 @@ fn fn_key_action() -> &'static str {
     }
 }
 
-/// Starts a fresh copy of MuskFlow and quits this one. Input Monitoring only takes effect
+/// Starts a fresh copy of Umless and quits this one. Input Monitoring only takes effect
 /// in a process started after it was allowed.
 fn restart() {
     let bundle = std::env::current_exe().ok().and_then(|exe| {
@@ -305,7 +305,7 @@ fn log_path() -> PathBuf {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default();
-    home.join("Library/Logs/MuskFlow.log")
+    home.join("Library/Logs/Umless.log")
 }
 
 fn arg_str<'a>(args: &'a Value, key: &str) -> Result<&'a str> {

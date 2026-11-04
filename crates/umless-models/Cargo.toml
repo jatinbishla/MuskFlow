@@ -1,0 +1,13 @@
+[package]
+name = "umless-models"
+description = "Umless model tiers (Lite / Standard / Max) and where their files live"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+ureq = "3.5"
+bzip2 = "0.6"
+tar = "0.4"
+indicatif = "0.18"

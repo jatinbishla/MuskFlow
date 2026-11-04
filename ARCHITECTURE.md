@@ -1,9 +1,9 @@
-# MuskFlow — Architecture
+# Umless — Architecture
 
 > Local, open-source voice dictation that writes what you *meant*, not just what you said.
 > Fast · Accurate · Creative · Light. Runs entirely on your laptop.
 
-Status: design v1 · 3 Nov 2026 · Working name "MuskFlow" (placeholder)
+Status: design v1 · 3 Nov 2026 · Working name "Umless" (placeholder)
 
 ---
 
@@ -30,7 +30,7 @@ Non-goals for v1: meeting transcription, speaker diarization, long-form (> 3 min
 │ Desktop app (Tauri shell: tray, settings, overlay pill)                      │
 │   ▲ events (state, partial text, levels)        │ commands (config, models)  │
 │   │                                             ▼                            │
-│ ┌──────────────────────────── muskflow-core (Rust) ─────────────────────────┐│
+│ ┌──────────────────────────── umless-core (Rust) ─────────────────────────┐│
 │ │                                                                           ││
 │ │  Hotkey ─► Session State Machine ◄──────────────── Config / Profiles      ││
 │ │               │                                                           ││
@@ -50,36 +50,36 @@ Non-goals for v1: meeting transcription, speaker diarization, long-form (> 3 min
         ▲ downloads once (HF, sha256-pinned)          No other network.
 ```
 
-One process. The core is a Rust library linked into the Tauri app and also into a headless `muskflow-cli` (for evals, scripting, and Linux users who want no UI).
+One process. The core is a Rust library linked into the Tauri app and also into a headless `umless-cli` (for evals, scripting, and Linux users who want no UI).
 
 ---
 
 ## 2. Repository layout
 
 ```
-muskflow/
+umless/
 ├── ARCHITECTURE.md
 ├── crates/
-│   ├── mf-core/        # session state machine, pipeline orchestration, metrics
-│   ├── mf-audio/       # capture, resample, ring buffer, VAD, pre-roll
-│   ├── mf-asr/         # Transcriber trait + backends (sherpa-onnx, whisper.cpp), committer
-│   ├── mf-context/     # ContextProvider trait + macos/windows/linux impls, entity extraction
-│   ├── mf-llm/         # llama.cpp wrapper, KV-prefix cache, prompt-lookup speculative decode
-│   ├── mf-cleanup/     # router, prompt builder, rule passes, modes, guard
-│   ├── mf-insert/      # Inserter trait + per-OS impls
-│   ├── mf-learn/       # edit watcher, dictionary, style stats, SQLite store
-│   ├── mf-models/      # manifest, downloader, hardware probe, tier selection
-│   └── mf-config/      # TOML config, per-app profiles, hot reload
+│   ├── umless-core/        # session state machine, pipeline orchestration, metrics
+│   ├── umless-audio/       # capture, resample, ring buffer, VAD, pre-roll
+│   ├── umless-asr/         # Transcriber trait + backends (sherpa-onnx, whisper.cpp), committer
+│   ├── umless-context/     # ContextProvider trait + macos/windows/linux impls, entity extraction
+│   ├── umless-llm/         # llama.cpp wrapper, KV-prefix cache, prompt-lookup speculative decode
+│   ├── umless-cleanup/     # router, prompt builder, rule passes, modes, guard
+│   ├── umless-insert/      # Inserter trait + per-OS impls
+│   ├── umless-learn/       # edit watcher, dictionary, style stats, SQLite store
+│   ├── umless-models/      # manifest, downloader, hardware probe, tier selection
+│   └── umless-config/      # TOML config, per-app profiles, hot reload
 ├── apps/
 │   ├── desktop/        # Tauri 2 app (Rust + Svelte/TS UI)
-│   └── cli/            # muskflow-cli: record/transcribe/clean/eval/bench
+│   └── cli/            # umless-cli: record/transcribe/clean/eval/bench
 ├── models/
 │   └── manifest.json   # model registry (urls, sha256, sizes, licenses, tiers)
 ├── training/           # Python: data generation, fine-tuning, export to GGUF/ONNX
 │   ├── datagen/
 │   ├── finetune/
 │   └── export/
-├── eval/               # MuskFlow-Bench: audio + context + gold, scorers, report
+├── eval/               # Umless-Bench: audio + context + gold, scorers, report
 └── docs/
 ```
 
@@ -87,7 +87,7 @@ muskflow/
 
 ## 3. The session pipeline (the hot path)
 
-### 3.1 State machine (`mf-core`)
+### 3.1 State machine (`umless-core`)
 
 ```
  Idle ──key down──► Arming ──mic open──► Listening ──key up / VAD end──► Finalizing
@@ -99,7 +99,7 @@ muskflow/
 ```
 
 - Hotkey modes: **hold-to-talk** (default), **toggle** (tap on / tap off), **hands-free** (toggle + VAD auto-stop after 1.5 s silence).
-- **Fn** = dictate (Clean/Polish/Prompt, chosen by the app profile). **Fn + Control** = **Command mode** (see §7): speak an instruction, MuskFlow reads the screen and writes the text. Double-tap Fn is an alternative trigger. Esc = cancel at any point; nothing is inserted. Capturing Fn needs a CGEventTap with the Input Monitoring permission.
+- **Fn** = dictate (Clean/Polish/Prompt, chosen by the app profile). **Fn + Control** = **Command mode** (see §7): speak an instruction, Umless reads the screen and writes the text. Double-tap Fn is an alternative trigger. Esc = cancel at any point; nothing is inserted. Capturing Fn needs a CGEventTap with the Input Monitoring permission.
 - Every transition is timestamped → per-session latency breakdown (in-app debug panel + `--bench`).
 
 ### 3.2 Critical-path timing (where the speed comes from)
@@ -123,7 +123,7 @@ Three tricks make this work. Most dictation tools use none of them:
 
 ---
 
-## 4. Audio (`mf-audio`)
+## 4. Audio (`umless-audio`)
 
 - **Capture:** `cpal`, device default or user-picked; mono; resampled to 16 kHz f32 with `rubato`.
 - **Mic warm-up:** opening a device on macOS can take 100–300 ms. Options:
@@ -140,7 +140,7 @@ Three tricks make this work. Most dictation tools use none of them:
 
 ---
 
-## 5. Speech recognition (`mf-asr`)
+## 5. Speech recognition (`umless-asr`)
 
 ### 5.1 Interface
 
@@ -188,7 +188,7 @@ This fixes names *at the source*. Wispr fixes them afterwards with the LLM; we d
 
 ---
 
-## 6. Context engine (`mf-context`)
+## 6. Context engine (`umless-context`)
 
 ### 6.1 What we capture (only at key-down, only in memory)
 
@@ -235,7 +235,7 @@ Score them by recency (closer to caret is better) and frequency. Keep the top 30
 
 ---
 
-## 7. Router, modes and cleanup (`mf-cleanup`)
+## 7. Router, modes and cleanup (`umless-cleanup`)
 
 ### 7.1 Modes ("creative" without being reckless)
 
@@ -247,12 +247,12 @@ Score them by recency (closer to caret is better) and frequency. Keep the top 30
 | **Prompt** *(USP)* | profile: AI apps (Claude, Claude Code, ChatGPT, Codex, Cursor, Gemini, a terminal running an AI CLI) | turn a rambling spoken request into a short, structured prompt: goal, context, constraints, output wanted; drop pleasantries and repetition so it uses the fewest tokens. Must keep every requirement, number, file path and identifier, spelled from screen context | medium (no new requirements, every constraint kept) |
 | **Command** | Fn + Control (or double-tap Fn), or text selected | follow a spoken instruction on the selection/field: "make this friendlier", "turn into bullet points", "reply saying yes but Friday", "translate to Hindi" | none (shows a preview first) |
 
-**Built (v1, `mf-context`):** on Fn-down MuskFlow reads the frontmost app and, through Accessibility, its focused window's title (so a browser tab is recognised as Gmail, ChatGPT, Claude…). It picks AI prompt for AI apps and terminals, Formal for mail, Teams, LinkedIn and Docs, Casual for Slack, WhatsApp, Messages and Discord, and Clean elsewhere. The user can fix one style in Settings. Rewriting styles are checked by `guard::check_rewrite`: names and numbers the speaker didn't say, dropped names, padding and answering-instead-of-rewriting all fall back to Clean. Lite keeps rewriting styles at Clean until its fine-tune learns them.
+**Built (v1, `umless-context`):** on Fn-down Umless reads the frontmost app and, through Accessibility, its focused window's title (so a browser tab is recognised as Gmail, ChatGPT, Claude…). It picks AI prompt for AI apps and terminals, Formal for mail, Teams, LinkedIn and Docs, Casual for Slack, WhatsApp, Messages and Discord, and Clean elsewhere. The user can fix one style in Settings. Rewriting styles are checked by `guard::check_rewrite`: names and numbers the speaker didn't say, dropped names, padding and answering-instead-of-rewriting all fall back to Clean. Lite keeps rewriting styles at Clean until its fine-tune learns them.
 
-**Built (v2):** `mf_context::screen` reads the focused field's selection and text before the cursor (AXSelectedText, AXValue + AXSelectedTextRange) and walks the focused window's AX tree for visible text, capped at 4,000 nodes, 300 ms and 4,000 characters, most recent last. Electron and Chromium apps are asked to build their tree with `AXManualAccessibility`. It runs on a thread while the user speaks, so it adds no latency. It's used three ways:
+**Built (v2):** `umless_context::screen` reads the focused field's selection and text before the cursor (AXSelectedText, AXValue + AXSelectedTextRange) and walks the focused window's AX tree for visible text, capped at 4,000 nodes, 300 ms and 4,000 characters, most recent last. Electron and Chromium apps are asked to build their tree with `AXManualAccessibility`. It runs on a thread while the user speaks, so it adds no latency. It's used three ways:
 - **Names:** capitalised words away from a sentence start become extra dictionary terms for this dictation. They only fix misspellings, never re-case a word ("mark" stays a verb).
 - **Tone:** casual or formal markers in the recent text override a chat app's default.
-- **Command mode:** the context for Fn + Control (`mf_cleanup::command`). Selection → replacement; no selection → new text at the cursor. Base models get three worked examples; MuskFlow fine-tunes from round 3 learned the prompt.
+- **Command mode:** the context for Fn + Control (`umless_cleanup::command`). Selection → replacement; no selection → new text at the cursor. Base models get three worked examples; Umless fine-tunes from round 3 learned the prompt.
 
 **Learning from corrections (built):** after typing, the field is read again at 10 s, 30 s and 90 s, and before the next dictation. A word-level alignment finds 1:1 swaps where the new spelling is one the dictionary would match the old word to ("Pria" → "Priya"). Those are appended to the dictionary under "# Learned from your corrections".
 
@@ -298,7 +298,7 @@ Our fine-tuned model is trained on this exact format, so we don't need a long sy
 - Greedy decoding (temperature 0) for Clean, so output is deterministic and maximally speculative-friendly. Polish/Command use temperature 0.3.
 - The system/app/mode/ctx prefix is **KV-cached per app** (prefix cache), so switching back to Slack reuses it.
 
-### 7.5 Faithfulness guard (`mf-cleanup::guard`) — the trust feature
+### 7.5 Faithfulness guard (`umless-cleanup::guard`) — the trust feature
 
 Run on Clean (strict) and Polish (medium):
 
@@ -316,7 +316,7 @@ Target: guard fallback < 2 % of sessions on the benchmark. A high rate means the
 
 ---
 
-## 8. LLM runtime (`mf-llm`)
+## 8. LLM runtime (`umless-llm`)
 
 - **Engine:** llama.cpp via a thin FFI wrapper (`llama-cpp-sys` pinned), GGUF Q4_K_M / Q5_K_M.
   - Backends: Metal (Mac), CUDA / Vulkan (Win/Linux GPU), CPU AVX2/NEON fallback.
@@ -336,7 +336,7 @@ Target: guard fallback < 2 % of sessions on the benchmark. A high rate means the
 
 ---
 
-## 9. Insertion (`mf-insert`)
+## 9. Insertion (`umless-insert`)
 
 Strategy chain per app (learned: remember which method worked per app id):
 
@@ -352,10 +352,10 @@ Strategy chain per app (learned: remember which method worked per app id):
 
 ---
 
-## 10. Learning (`mf-learn`) — gets better the more you use it, locally
+## 10. Learning (`umless-learn`) — gets better the more you use it, locally
 
 - **Edit watcher:** for 15 s after insertion (or until the focus changes), poll the field value via the context provider every 500 ms. Diff what we inserted against what's there now.
-- **Dictionary respelling (built, `mf-cleanup::dictionary`):** the primary way names come out right, on every tier. Measurements showed the speech models nearly always *hear* a rare term correctly and only *spell* it wrong ("Subflow", "firman", "Zirodhaa"), while decoder hotword boosting either did nothing (≤1.5/token) or made Parakeet hallucinate the term (≥6/token), and Whisper can't be boosted at all. So a window of 0–2 extra transcript words is replaced by a dictionary term when its consonant skeleton matches (one slack for terms ≥8 letters), the first letter matches and the letter edit distance is ≤34% of the term. It runs before the LLM and again after it. Decoder boosting stays available as an opt-in (`--hotword-boost`); MuskFlow spells the hotwords into the model's own BPE pieces, because sherpa-onnx rejects whole words for NeMo models.
+- **Dictionary respelling (built, `umless-cleanup::dictionary`):** the primary way names come out right, on every tier. Measurements showed the speech models nearly always *hear* a rare term correctly and only *spell* it wrong ("Subflow", "firman", "Zirodhaa"), while decoder hotword boosting either did nothing (≤1.5/token) or made Parakeet hallucinate the term (≥6/token), and Whisper can't be boosted at all. So a window of 0–2 extra transcript words is replaced by a dictionary term when its consonant skeleton matches (one slack for terms ≥8 letters), the first letter matches and the letter edit distance is ≤34% of the term. It runs before the LLM and again after it. Decoder boosting stays available as an opt-in (`--hotword-boost`); Umless spells the hotwords into the model's own BPE pieces, because sherpa-onnx rejects whole words for NeMo models.
 - **Dictionary learning:** a single-token or short-span replacement where old ≈ new phonetically (Double Metaphone / Jaro-Winkler) becomes a candidate. It is promoted after 2 sightings or 1 manual confirm. Entries feed ASR hotwords and LLM `ctx`.
 - **Style stats:** per app — do you delete our trailing periods? lowercase starts? strip emoji? These flip profile switches automatically, with a "we noticed…" toast so it's never silent.
 - **Snippets:** "insert my calendar link" → exact text expansion. Matched by the router before the LLM (fuzzy match on trigger phrase).
@@ -364,19 +364,19 @@ Strategy chain per app (learned: remember which method worked per app id):
 
 ---
 
-## 11. Models (`mf-models`)
+## 11. Models (`umless-models`)
 
 ### 11.1 Tiers (auto-picked by the hardware probe; the user can override)
 
 | Tier | Target machine | ASR | Cleanup | Disk | Active RAM |
 |---|---|---|---|---|---|
-| **Lite** | 8 GB, CPU-only / old Intel | Parakeet-TDT 110M int8 (committer) | Qwen3.5 0.8B Q4_K_M (→ fine-tuned `muskflow-clean-lite`) + rules | ~0.65 GB | ~1 GB |
+| **Lite** | 8 GB, CPU-only / old Intel | Parakeet-TDT 110M int8 (committer) | Qwen3.5 0.8B Q4_K_M (→ fine-tuned `umless-clean-lite`) + rules | ~0.65 GB | ~1 GB |
 | **Standard** | Apple Silicon 8–16 GB, any GPU laptop | Parakeet-TDT 0.6B v3 int8 (committer) | Qwen3.5 2B Q4_K_M | ~1.8 GB | ~2.2 GB |
 | **Max** | 16 GB+ Apple Silicon / 8 GB VRAM | Whisper large-v3-turbo, decoded by VAD phrase (99 languages) | Qwen3 4B Instruct 2507 Q4_K_M | ~3.1 GB | ~4 GB |
 
 **Lite must be as accurate as Max.** Lite users are the people with the weakest laptops, and they deserve the same result. So:
 
-1. **Every benchmark runs all three tiers** (`muskflow bench`), and the report leads with each tier's *gap to the best tier*.
+1. **Every benchmark runs all three tiers** (`umless bench`), and the report leads with each tier's *gap to the best tier*.
 2. A change that helps one tier and hurts another doesn't ship.
 3. Close the gap with things that cost Lite nothing at run time:
    - context and dictionary hotwords (names),
@@ -384,16 +384,16 @@ Strategy chain per app (learned: remember which method worked per app id):
    - **distillation**: Max transcripts of real and synthetic speech become fine-tuning labels for the Lite ASR and the small cleanup model (§12.1).
 4. Lite may be slower to *learn* (it needs more fine-tuning), but not less accurate at the end.
 
-Base models for our fine-tunes are chosen by MuskFlow-Bench, not by reputation. Candidates: Qwen 3.5 0.8B/2B, Llama 3.2 1B, Gemma edge variants. Check every licence before redistributing.
+Base models for our fine-tunes are chosen by Umless-Bench, not by reputation. Candidates: Qwen 3.5 0.8B/2B, Llama 3.2 1B, Gemma edge variants. Check every licence before redistributing.
 
 ### 11.2 Manifest (`models/manifest.json`)
 
 ```json
 {
-  "id": "muskflow-clean-1.5b-q4km",
+  "id": "umless-clean-1.5b-q4km",
   "kind": "cleanup",
   "format": "gguf",
-  "url": "https://huggingface.co/muskflow/clean-1.5b/resolve/<commit>/model-q4_k_m.gguf",
+  "url": "https://huggingface.co/umless/clean-1.5b/resolve/<commit>/model-q4_k_m.gguf",
   "sha256": "…",
   "bytes": 1032847360,
   "license": "apache-2.0",
@@ -433,7 +433,7 @@ Initial scale: ~30k pairs → v0 model. Then iterate on benchmark failures.
 
 ### 12.1 Fine-tuning any model that isn't good enough (policy)
 
-Every model in the pipeline (ASR, VAD, cleanup LLM, tagger) starts as an off-the-shelf open model. We fine-tune one **only when end-to-end testing on MuskFlow-Bench shows it is the bottleneck** for a slice we care about.
+Every model in the pipeline (ASR, VAD, cleanup LLM, tagger) starts as an off-the-shelf open model. We fine-tune one **only when end-to-end testing on Umless-Bench shows it is the bottleneck** for a slice we care about.
 
 1. **Find the bottleneck.** The bench reports each stage's error separately: raw-ASR WER per slice; cleanup errors given a perfect transcript (we feed gold ASR text); entity errors with and without context.
 2. **Fine-tune the weakest stage on that slice.**
@@ -441,11 +441,11 @@ Every model in the pipeline (ASR, VAD, cleanup LLM, tagger) starts as an off-the
    - **Cleanup LLM:** as in §12 above.
    - **VAD:** only if it clips first syllables or misses soft speech on laptop mics.
 3. **Release gate.** The fine-tuned model must beat the base on the target slice **and not regress any other slice by more than 2 % relative**. Latency and size are measured *after* quantisation/export.
-4. **Publish.** Each fine-tune ships as its own Hugging Face repo (`muskflow/<base>-<purpose>`, e.g. `muskflow/parakeet-0.6b-indic-en`) with a model card, training recipe, data provenance, bench scores, and the base model's licence. The manifest points at it, and users can switch back to the base model.
+4. **Publish.** Each fine-tune ships as its own Hugging Face repo (`umless/<base>-<purpose>`, e.g. `umless/parakeet-0.6b-indic-en`) with a model card, training recipe, data provenance, bench scores, and the base model's licence. The manifest points at it, and users can switch back to the base model.
 
 ---
 
-## 13. MuskFlow-Bench (`eval/`)
+## 13. Umless-Bench (`eval/`)
 
 - ~2,000 utterances: audio (real recordings from contributors + held-out synthetic), context JSON, gold output, slice tags (accent, app kind, correction, list, entity, Hinglish, noise, short).
 - Scorers:
@@ -458,7 +458,7 @@ Every model in the pipeline (ASR, VAD, cleanup LLM, tagger) starts as an off-the
   - guard fallback rate,
   - latency p50/p99 per tier on reference machines.
 - LLM-as-judge pairwise preference vs other tools' outputs on the same audio (published with methodology).
-- Runs in CI on a small subset for every PR touching `mf-asr`, `mf-cleanup`, `mf-llm` or prompts. The full run happens nightly.
+- Runs in CI on a small subset for every PR touching `umless-asr`, `umless-cleanup`, `umless-llm` or prompts. The full run happens nightly.
 
 ---
 
@@ -484,9 +484,9 @@ Every model in the pipeline (ASR, VAD, cleanup LLM, tagger) starts as an off-the
   - tokio runtime for orchestration + UI events.
 - **Message passing:** `crossbeam` channels; the session is an actor. Cancellation via a `CancellationToken` checked between ASR windows and every decode step.
 - **Zero-copy audio:** ring buffer slices are passed by reference to ASR.
-- **Allocation discipline:** pre-allocated batch buffers in `mf-llm`; reused tokeniser buffers.
+- **Allocation discipline:** pre-allocated batch buffers in `umless-llm`; reused tokeniser buffers.
 - **Startup:** app shows in < 300 ms; models load lazily. Binary size target < 25 MB (llama.cpp + sherpa-onnx statically linked, LTO, stripped).
-- **Benchmarks:** `muskflow-cli bench` reports per-stage p50/p99 over the bench set. A regression > 10 % fails CI on the reference runner (M-series Mac mini).
+- **Benchmarks:** `umless-cli bench` reports per-stage p50/p99 over the bench set. A regression > 10 % fails CI on the reference runner (M-series Mac mini).
 
 ---
 
@@ -500,7 +500,7 @@ Every model in the pipeline (ASR, VAD, cleanup LLM, tagger) starts as an off-the
 
 ---
 
-## 17. Configuration (`~/.config/muskflow/config.toml`)
+## 17. Configuration (`~/.config/umless/config.toml`)
 
 ```toml
 [hotkey]
@@ -536,19 +536,19 @@ tone = "professional"
 
 - **CI** (GitHub Actions): fmt/clippy/test; bench subset; build matrix — macOS arm64 + x86_64 (universal), Windows x64/arm64, Linux x64 (AppImage, Flatpak, .deb).
 - **Releases:** Tauri updater with signed update manifests (opt-in auto-update). Homebrew cask, winget, Flathub.
-- **Models:** Hugging Face org `muskflow`, each with a model card + benchmark scores + licence.
+- **Models:** Hugging Face org `umless`, each with a model card + benchmark scores + licence.
 - **Licence:** Apache-2.0 for code. Fine-tuned models inherit their base model licences (documented per model).
 
 ---
 
 ## 19. Build order ("in one go", but in dependency order)
 
-1. `mf-audio` + `mf-asr` + `muskflow-cli transcribe` → measure ASR latency/accuracy on our voices.
-2. `mf-llm` with prefix cache + prompt-lookup; `mf-cleanup` rules + guard; `muskflow-cli clean` with a prompted base model.
-3. `eval/` bench v0 + `training/` datagen → first fine-tuned `muskflow-clean` → swap it in.
-4. `mf-context` + `mf-insert` (macOS first) + `mf-core` state machine → end-to-end dictation from the CLI.
+1. `umless-audio` + `umless-asr` + `umless-cli transcribe` → measure ASR latency/accuracy on our voices.
+2. `umless-llm` with prefix cache + prompt-lookup; `umless-cleanup` rules + guard; `umless-cli clean` with a prompted base model.
+3. `eval/` bench v0 + `training/` datagen → first fine-tuned `umless-clean` → swap it in.
+4. `umless-context` + `umless-insert` (macOS first) + `umless-core` state machine → end-to-end dictation from the CLI.
 5. `apps/desktop`: tray, overlay, settings, first-run, model manager.
-6. `mf-learn`: dictionary, style stats, snippets.
+6. `umless-learn`: dictionary, style stats, snippets.
 7. Polish + Command modes, BYO endpoint.
 8. Windows → Linux ports of context/insert/hotkey.
 9. Public bench + model release + v1.0.
@@ -565,4 +565,4 @@ tone = "professional"
 | Electron/Chromium accessibility gaps | Enable `AXManualAccessibility`; fall back to paste with no context |
 | Wayland insertion fragmentation | IBus/Fcitx input-method path as the primary on Linux |
 | Model licence constraints | Licence matrix in `models/manifest.json`; prefer Apache/MIT bases |
-| Existing OSS tools (OpenWhispr, VoiceInk, MuskFlow) | Differentiate on the fine-tuned model, guard, latency and bench; publish the model so the ecosystem standardises on it |
+| Existing OSS tools (OpenWhispr, VoiceInk, Umless) | Differentiate on the fine-tuned model, guard, latency and bench; publish the model so the ecosystem standardises on it |

@@ -2,7 +2,7 @@
 
 | Tier | Models | Size | Load | **Final WER** (vs meant) | Gap | Rules-only WER | ASR WER (vs said) | Gap | Key-up → text p50 / max | Cleanup p50 | Guard fallbacks | CPU while speaking |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **lite** | Parakeet-TDT 110M int8 (English) + MuskFlow-Lite-0.8B-r2-Q4_K_M | 678 MB | 2.2 s | **6.3%** | — | 9.3% | 9.2% | — | 880 / 1659 ms | 705 ms | 2/11 | 22% |
+| **lite** | Parakeet-TDT 110M int8 (English) + Umless-Lite-0.8B-r2-Q4_K_M | 678 MB | 2.2 s | **6.3%** | — | 9.3% | 9.2% | — | 880 / 1659 ms | 705 ms | 2/11 | 22% |
 
 ### Per clip: final WER (ASR WER)
 

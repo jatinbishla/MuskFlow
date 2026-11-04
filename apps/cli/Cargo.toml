@@ -1,25 +1,25 @@
 [package]
-name = "muskflow-cli"
-description = "MuskFlow from the terminal: app (hold Fn to dictate), listen, transcribe, bench"
+name = "umless-cli"
+description = "Umless from the terminal: app (hold Fn to dictate), listen, transcribe, bench"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "muskflow"
+name = "umless"
 path = "src/main.rs"
 
 [dependencies]
-mf-audio.workspace = true
-mf-asr.workspace = true
-mf-eval.workspace = true
-mf-models.workspace = true
-mf-llm.workspace = true
-mf-cleanup.workspace = true
-mf-hotkey.workspace = true
-mf-insert.workspace = true
-mf-shell.workspace = true
-mf-context.workspace = true
+umless-audio.workspace = true
+umless-asr.workspace = true
+umless-eval.workspace = true
+umless-models.workspace = true
+umless-llm.workspace = true
+umless-cleanup.workspace = true
+umless-hotkey.workspace = true
+umless-insert.workspace = true
+umless-shell.workspace = true
+umless-context.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 crossbeam-channel.workspace = true

@@ -8,7 +8,7 @@ Test clip: 17.2 s synthetic messy dictation (`say -v Samantha`), containing fill
 
 The ASR is *supposed* to keep fillers and corrections: removing them is the cleanup LLM's job.
 
-## 2026-11-03 — ASR, streaming replay (`muskflow stream`, real time)
+## 2026-11-03 — ASR, streaming replay (`umless stream`, real time)
 
 | Model | Settings | Transcript quality | Decode CPU while speaking (% of audio time) | Key-up → text |
 |---|---|---|---|---|
@@ -18,7 +18,7 @@ The ASR is *supposed* to keep fillers and corrections: removing them is the clea
 | Parakeet-TDT 110M int8 | step 1.0 s, context 1.0 s, 4 threads | names wrong ("Kridaya"), a seam duplicate | 22 % | 84 ms |
 | Parakeet unified 0.6B streaming 560 ms | native streaming | dropped first sentence; re-encodes everything | 836 % | 7 s ❌ (config issue, not investigated yet) |
 
-One-shot (`muskflow transcribe`): Parakeet 0.6B v3 decodes 17 s in ~1.6 s (≈10× real time, 8 threads); CoreML provider gave no speed-up for the int8 model.
+One-shot (`umless transcribe`): Parakeet 0.6B v3 decodes 17 s in ~1.6 s (≈10× real time, 8 threads); CoreML provider gave no speed-up for the int8 model.
 
 ### Takeaways
 - **Default: Parakeet 0.6B v3 + committer, step 1 s, context 1 s.** Already inside the 350 ms end-to-end budget for the ASR share.
@@ -27,7 +27,7 @@ One-shot (`muskflow transcribe`): Parakeet 0.6B v3 decodes 17 s in ~1.6 s (≈10
 - Hotwords (`--hotwords`, beam search) had **no effect** and doubled the decode time. (Fixed later: see the dictionary section below.)
 - Biggest remaining win: run Parakeet on the Apple Neural Engine / GPU (CoreML fp16 build) instead of int8 on CPU. That would cut CPU use while speaking from 30 % to a few % (battery).
 
-## 2026-11-03 — live mic (`muskflow listen`, MacBook Air M5, built-in mic)
+## 2026-11-03 — live mic (`umless listen`, MacBook Air M5, built-in mic)
 
 | Run | Speech | Enter → text | Notes |
 |---|---|---|---|
@@ -69,7 +69,7 @@ Fixes: agreement ignores fillers and tolerates ≤3 dropped lead words (keeping 
 
 Live check (jatin-01, 52 s, MacBook Air): transcript complete with first words kept, but Enter → text 1,442 ms = final decode 563 ms + ~880 ms waiting for the in-flight decode. Replaying the same recording: average decode ≈ 370 ms, final ≈ 500 ms. **The remaining latency is decode speed on CPU**, so the next lever is GPU/ANE inference.
 
-## 2026-11-03 — all three tiers, ASR only (`muskflow bench`, real-time replay)
+## 2026-11-03 — all three tiers, ASR only (`umless bench`, real-time replay)
 
 Full report with transcripts: [bench/2026-11-03-asr-tiers.md](bench/2026-11-03-asr-tiers.md). MacBook Air M5, CPU only, 8 clips / 100 s, US + UK + Indian English voices.
 
@@ -122,7 +122,7 @@ Full report: [bench/2026-11-03-dictionary-tiers.md](bench/2026-11-03-dictionary-
 | Standard | 7.2% | **3.6%** | 6.9% |
 | Max | 4.2% | **1.5%** | 4.5% |
 
-- **Decoder hotwords were fixed and are opt-in.** sherpa-onnx rejected whole words for NeMo models, so every hotword was silently dropped. MuskFlow now spells them into the model's own BPE pieces. Even so, a boost of 3/token barely helps, and 6+ makes Parakeet hallucinate the terms. That's why it's `--hotword-boost`, off by default.
+- **Decoder hotwords were fixed and are opt-in.** sherpa-onnx rejected whole words for NeMo models, so every hotword was silently dropped. Umless now spells them into the model's own BPE pieces. Even so, a boost of 3/token barely helps, and 6+ makes Parakeet hallucinate the terms. That's why it's `--hotword-boost`, off by default.
 - **Dictionary respelling** does the work, on every tier including Whisper. Examples: Subflow→SubFlo, firman→foreman, Zirodhaa→Zerodha, Garv→Gaurav, Nick Hill→Nikhil, "turn a construction"→Turner Construction.
 - **No regressions** on clips without dictionary terms.
 - **Still missed:** "Siobhan" (heard as "Chavon"/"Shivan"; the Irish spelling doesn't match the sound) and "Razape"→Razorpay on Lite.
@@ -135,7 +135,7 @@ Full report: [bench/2026-11-04-lite-finetune-r1.md](bench/2026-11-04-lite-finetu
 | Lite cleanup model | Final WER (11 real-speech clips) | Guard fallbacks |
 |---|---|---|
 | Qwen3.5-0.8B, few-shot (current) | **6.6%** | 2/11 |
-| MuskFlow-Lite-Cleanup-0.8B, round 1 | 6.9% | 1/11 |
+| Umless-Lite-Cleanup-0.8B, round 1 | 6.9% | 1/11 |
 
 **It's a tie, not a win, so Lite keeps the base model.**
 
@@ -156,7 +156,7 @@ Full report: [bench/2026-11-04-lite-finetune-r2.md](bench/2026-11-04-lite-finetu
 | Lite cleanup model | Final WER (11 clips) | Cleanup p50 | Guard fallbacks |
 |---|---|---|---|
 | Qwen3.5-0.8B, few-shot (current) | 6.6% | 602 ms | 2/11 |
-| MuskFlow-Lite-0.8B, round 2 | **6.3%** | 705 ms | 2/11 |
+| Umless-Lite-0.8B, round 2 | **6.3%** | 705 ms | 2/11 |
 | *Standard / Max, for reference* | *3.6% / 1.5%* | | |
 
 **Clean dictation:** a small win. Round 2 resolves "Thursday, no wait, Friday" in `dictation` (15.4% → 10.3%), which the base model never does, and "Hi, I'm Jatin" is kept.

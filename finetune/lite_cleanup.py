@@ -1,4 +1,4 @@
-"""MuskFlow Lite cleanup fine-tune: the whole pipeline in one file, built to run on a free Colab GPU.
+"""Umless Lite cleanup fine-tune: the whole pipeline in one file, built to run on a free Colab GPU.
 
     python lite_cleanup.py gen      # a teacher LLM writes clean messages          → work/clean.jsonl
     python lite_cleanup.py styles   # ...and spoken requests → AI prompts / formal  → work/styles.jsonl
@@ -10,7 +10,7 @@
 
 The model learns Lite's raw transcript in, the text the speaker meant out, in three
 modes: clean (minimal edits), formal (polished writing) and prompt (a concise
-instruction for an AI assistant). It's trained on MuskFlow's compact prompts
+instruction for an AI assistant). It's trained on Umless's compact prompts
 (SYSTEMS), not the long few-shot ones, so at inference the prompt is ~40-60 tokens.
 
 Round 2 fixed what round 1 got wrong on real speech: corrections that replace a whole
@@ -44,8 +44,8 @@ WORK = Path("work")
 BASE = "Qwen/Qwen3.5-0.8B"
 TEACHER = "Qwen/Qwen3-4B-Instruct-2507"
 
-# Keep in sync with mf-cleanup's COMPACT_SYSTEM / COMPACT_FORMAL / COMPACT_PROMPT
-# (`muskflow prompt --compact --style <mode>` prints them).
+# Keep in sync with umless-cleanup's COMPACT_SYSTEM / COMPACT_FORMAL / COMPACT_PROMPT
+# (`umless prompt --compact --style <mode>` prints them).
 SYSTEMS = {
     "clean": (
         "Clean up dictated text: remove fillers and stammers, keep only the corrected part of "
@@ -67,10 +67,10 @@ SYSTEMS = {
 }
 
 
-# Keep in sync with mf-cleanup/src/command.rs (SYSTEM and user_turn). Round 3+ models get
+# Keep in sync with umless-cleanup/src/command.rs (SYSTEM and user_turn). Round 3+ models get
 # this system line alone, without the few-shot examples the base models need.
 SYSTEMS["command"] = (
-    "You are MuskFlow, a writing assistant built into the user's keyboard. The user spoke an instruction; "
+    "You are Umless, a writing assistant built into the user's keyboard. The user spoke an instruction; "
     "you write the exact text to put where they are typing, ready to send.\n"
     "Rules:\n"
     "- Output only that text. No preamble (\"Sure\", \"Here is\"), no quotes around it, no notes after it.\n"
@@ -88,7 +88,7 @@ TONES = {"formal": "professional", "casual": "friendly and casual",
 
 
 def command_user(row: dict) -> str:
-    """The user turn mf-cleanup's command mode sends, byte for byte."""
+    """The user turn umless-cleanup's command mode sends, byte for byte."""
     msg = f"App: {row['app']}\n" if row.get("app") else ""
     msg += f"Tone: {TONES[row.get('tone', 'clean')]}\n"
     if row.get("screen"):

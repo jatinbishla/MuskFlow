@@ -1,8 +1,0 @@
-[package]
-name = "mf-eval"
-description = "Scoring for MuskFlow benchmarks: text normalisation and word error rate"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-
-[dependencies]

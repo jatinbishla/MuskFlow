@@ -1,4 +1,4 @@
-//! `muskflow` — headless MuskFlow for development, benchmarking and scripting.
+//! `umless` — headless Umless for development, benchmarking and scripting.
 
 mod app;
 mod bench;
@@ -14,35 +14,35 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
-use mf_asr::{CommitterConfig, Engine, Hypothesis, SessionStats, Word};
-use mf_audio::{
+use umless_asr::{CommitterConfig, Engine, Hypothesis, SessionStats, Word};
+use umless_audio::{
     MicCapture, SpeechTrimmer, VadConfig, list_inputs, load_wav_16k, samples_to_secs, save_wav_16k,
 };
-use mf_cleanup::{Cleaner, Dictionary};
-use mf_llm::{Llm, LlmConfig};
-use mf_models::{Tier, parse_tiers};
+use umless_cleanup::{Cleaner, Dictionary};
+use umless_llm::{Llm, LlmConfig};
+use umless_models::{Tier, parse_tiers};
 
 #[derive(Parser)]
 #[command(
-    name = "muskflow",
+    name = "umless",
     version,
     about = "Local voice dictation that writes what you meant"
 )]
 struct Cli {
     #[command(flatten)]
     common: Common,
-    /// Defaults to `app` inside MuskFlow.app (launched with no arguments).
+    /// Defaults to `app` inside Umless.app (launched with no arguments).
     #[command(subcommand)]
     cmd: Option<Cmd>,
 }
 
 #[derive(Args, Clone)]
 pub(crate) struct Common {
-    /// Directory for downloaded models (`muskflow models install` fills it).
-    #[arg(long, env = "MUSKFLOW_MODELS", default_value = "models", global = true)]
+    /// Directory for downloaded models (`umless models install` fills it).
+    #[arg(long, env = "UMLESS_MODELS", default_value = "models", global = true)]
     pub(crate) models: PathBuf,
     /// Model tier: lite, standard or max.
-    #[arg(long, env = "MUSKFLOW_TIER", default_value = "standard", global = true)]
+    #[arg(long, env = "UMLESS_TIER", default_value = "standard", global = true)]
     tier: Tier,
     /// Use this ASR model directory (inside --models) instead of the tier's.
     #[arg(long, global = true)]
@@ -63,7 +63,7 @@ pub(crate) struct Common {
     #[arg(long, value_delimiter = ',', global = true)]
     hotwords: Vec<String>,
     /// Your dictionary: one name or term per line, spelled the way you want it.
-    #[arg(long, env = "MUSKFLOW_DICTIONARY", global = true)]
+    #[arg(long, env = "UMLESS_DICTIONARY", global = true)]
     dictionary: Option<PathBuf>,
     /// Also bias the speech model towards dictionary terms, this much per token
     /// (Parakeet tiers; beam search). 0 = off. Above ~2 it starts inventing them.
@@ -96,7 +96,7 @@ enum Cmd {
     },
     /// Dictate from the microphone; press Enter to stop.
     Listen {
-        /// Input device: part of its name or id (see `muskflow devices`). Default: system input.
+        /// Input device: part of its name or id (see `umless devices`). Default: system input.
         #[arg(long)]
         mic: Option<String>,
         /// Also save the recording as a 16 kHz WAV (replay it later with `stream`).
@@ -106,13 +106,13 @@ enum Cmd {
     /// Run in the background: hold Fn anywhere to dictate, and the cleaned text is typed at
     /// your cursor. Fn + Control is command mode. macOS; needs Input Monitoring and Accessibility.
     App {
-        /// Input device: part of its name or id (see `muskflow devices`). Default: system input.
+        /// Input device: part of its name or id (see `umless devices`). Default: system input.
         #[arg(long)]
         mic: Option<String>,
     },
     /// List microphones.
     Devices,
-    /// Download or list models. Everything MuskFlow needs comes through here.
+    /// Download or list models. Everything Umless needs comes through here.
     Models {
         #[command(subcommand)]
         action: ModelsCmd,
@@ -143,7 +143,7 @@ enum Cmd {
         text: Option<String>,
         /// clean, formal, casual or prompt.
         #[arg(long, default_value = "clean")]
-        style: mf_cleanup::Style,
+        style: umless_cleanup::Style,
     },
     /// Command mode without the keyboard: carry out a spoken instruction, optionally on a
     /// selection and with what's on screen, as Fn + Control does in the app.
@@ -161,18 +161,18 @@ enum Cmd {
         app: Option<String>,
         /// clean, formal, casual or prompt: the tone to write in.
         #[arg(long, default_value = "clean")]
-        style: mf_cleanup::Style,
+        style: umless_cleanup::Style,
     },
     /// Print the cleanup prompt for `text` as prefix, a NUL byte, then suffix (for fine-tuning).
     #[command(hide = true)]
     Prompt {
         text: String,
-        /// The compact prompt MuskFlow's fine-tuned models use.
+        /// The compact prompt Umless's fine-tuned models use.
         #[arg(long)]
         compact: bool,
         /// clean, formal, casual or prompt.
         #[arg(long, default_value = "clean")]
-        style: mf_cleanup::Style,
+        style: umless_cleanup::Style,
     },
 }
 
@@ -195,7 +195,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let cmd = match &cli.cmd {
         Some(cmd) => cmd,
-        // Double-clicked MuskFlow.app: macOS starts the binary with no arguments.
+        // Double-clicked Umless.app: macOS starts the binary with no arguments.
         None if app::in_app_bundle() => &Cmd::App { mic: None },
         None => {
             use clap::CommandFactory;
@@ -211,7 +211,7 @@ fn main() -> Result<()> {
         Cmd::Devices => devices(),
         Cmd::Models {
             action: ModelsCmd::Install { tiers },
-        } => mf_models::install(&cli.common.models, &parse_tiers(tiers)?),
+        } => umless_models::install(&cli.common.models, &parse_tiers(tiers)?),
         Cmd::Models {
             action: ModelsCmd::List,
         } => list_models(&cli.common.models),
@@ -245,7 +245,7 @@ fn main() -> Result<()> {
                 None => String::new(),
             };
             let cleaner = load_cleaner(&cli.common, &llm_path(&cli.common, cli.common.tier))?;
-            let cx = mf_cleanup::command::Context {
+            let cx = umless_cleanup::command::Context {
                 app: app.as_deref(),
                 style: *style,
                 selection: selection.as_deref(),
@@ -276,9 +276,9 @@ fn main() -> Result<()> {
             style,
         } => {
             let (prefix, suffix) = if *compact {
-                mf_cleanup::build_compact_prompt(text, *style)
+                umless_cleanup::build_compact_prompt(text, *style)
             } else {
-                mf_cleanup::build_prompt(text)
+                umless_cleanup::build_prompt(text)
             };
             print!("{prefix}\0{suffix}");
             Ok(())
@@ -291,7 +291,7 @@ fn devices() -> Result<()> {
         let mark = if d.is_default { "*" } else { " " };
         println!("{mark} {}  ({})", d.name, d.id);
     }
-    eprintln!("· * = system default. Pick one with: muskflow listen --mic \"<part of name>\"");
+    eprintln!("· * = system default. Pick one with: umless listen --mic \"<part of name>\"");
     Ok(())
 }
 
@@ -361,7 +361,7 @@ pub(crate) fn load_cleaner(c: &Common, path: &Path) -> Result<Cleaner> {
     Ok(cleaner)
 }
 
-fn clean(c: &Common, text: Option<&str>, style: mf_cleanup::Style) -> Result<()> {
+fn clean(c: &Common, text: Option<&str>, style: umless_cleanup::Style) -> Result<()> {
     let text = match text {
         Some(t) => t.to_string(),
         None => std::io::read_to_string(std::io::stdin())?,
@@ -410,14 +410,14 @@ fn list_models(models: &Path) -> Result<()> {
             tier.asr_label()
         );
     }
-    eprintln!("· install with: muskflow models install <lite|standard|max|all>");
+    eprintln!("· install with: umless models install <lite|standard|max|all>");
     Ok(())
 }
 
 pub(crate) fn load_engine(c: &Common, dir: &Path) -> Result<Engine> {
     if !dir.is_dir() {
         anyhow::bail!(
-            "model {} isn't installed. Run: muskflow models install {}",
+            "model {} isn't installed. Run: umless models install {}",
             dir.display(),
             c.tier
         );
@@ -632,7 +632,7 @@ impl Recording {
         let peak_db = 20.0 * self.peak.max(1e-9).log10();
         if self.peak < 1e-3 {
             return Some(format!(
-                "the mic sent silence (peak {peak_db:.0} dBFS). Check it isn't muted, or pick another with --mic (see `muskflow devices`).\n  Bluetooth headsets often deliver nothing until they switch to headset mode."
+                "the mic sent silence (peak {peak_db:.0} dBFS). Check it isn't muted, or pick another with --mic (see `umless devices`).\n  Bluetooth headsets often deliver nothing until they switch to headset mode."
             ));
         }
         if vad.speech_bounds(&self.audio).is_none() {

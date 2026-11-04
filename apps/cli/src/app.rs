@@ -1,4 +1,4 @@
-//! `muskflow app` (and MuskFlow.app): hold Fn anywhere, speak, let go, and the
+//! `umless app` (and Umless.app): hold Fn anywhere, speak, let go, and the
 //! cleaned text is typed at your cursor.
 //!
 //! A menu-bar icon shows the state, a pill near the bottom of the screen shows
@@ -8,7 +8,7 @@
 //!
 //! Fn + Control is command mode: say what to write ("reply saying I'll send it
 //! Friday", or "make this shorter" with text selected). While the user speaks, the
-//! text on screen is read in the background (mf-context): it gives command mode its
+//! text on screen is read in the background (umless-context): it gives command mode its
 //! context, spells names the way the screen does, and sets the tone. After typing,
 //! the field is watched for a minute and a half so fixed names can be learned.
 
@@ -16,12 +16,12 @@ use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime};
 
 use anyhow::{Context, Result};
-use mf_audio::samples_to_secs;
-use mf_cleanup::{Cleaner, Style};
-use mf_context::{Focus, Screen};
-use mf_hotkey::{Event, Mode};
-use mf_models::Tier;
-use mf_shell::{State, Ui};
+use umless_audio::samples_to_secs;
+use umless_cleanup::{Cleaner, Style};
+use umless_context::{Focus, Screen};
+use umless_hotkey::{Event, Mode};
+use umless_models::Tier;
+use umless_shell::{State, Ui};
 
 use crate::history::{Entry, History};
 use crate::learn::{self, Pending};
@@ -34,8 +34,8 @@ use crate::{
 const MIN_SPEECH_SECS: f32 = 0.3;
 
 const DICTIONARY_TEMPLATE: &str = "\
-# MuskFlow dictionary: one name or term per line, spelled the way you want it typed.
-# MuskFlow fixes words that sound like these but come out spelled wrong
+# Umless dictionary: one name or term per line, spelled the way you want it typed.
+# Umless fixes words that sound like these but come out spelled wrong
 # (\"Subflow\" -> SubFlo, \"firman\" -> foreman). Saved changes apply to the next dictation.
 #
 # Examples:
@@ -44,19 +44,19 @@ const DICTIONARY_TEMPLATE: &str = "\
 # lien waivers
 ";
 
-/// Whether this binary is running as MuskFlow.app (double-clicked, no arguments).
+/// Whether this binary is running as Umless.app (double-clicked, no arguments).
 pub fn in_app_bundle() -> bool {
     std::env::current_exe()
         .map(|p| p.to_string_lossy().contains(".app/Contents/MacOS/"))
         .unwrap_or(false)
 }
 
-/// A double-clicked app has no terminal: send stderr to `~/Library/Logs/MuskFlow.log`.
+/// A double-clicked app has no terminal: send stderr to `~/Library/Logs/Umless.log`.
 pub fn log_to_file() {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default();
-    let path = home.join("Library/Logs/MuskFlow.log");
+    let path = home.join("Library/Logs/Umless.log");
     #[cfg(target_os = "macos")]
     if let Ok(file) = std::fs::OpenOptions::new()
         .create(true)
@@ -72,15 +72,35 @@ pub fn log_to_file() {
     let _ = path;
 }
 
-/// `~/Library/Application Support/MuskFlow/dictionary.txt`.
+/// `~/Library/Application Support/Umless/dictionary.txt`.
 fn default_dictionary() -> PathBuf {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default();
-    home.join("Library/Application Support/MuskFlow/dictionary.txt")
+    home.join("Library/Application Support/Umless/dictionary.txt")
+}
+
+/// Umless was called MuskFlow: carry the user's history, dictionary and settings over.
+fn move_old_data() {
+    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+        return;
+    };
+    let support = home.join("Library/Application Support");
+    let (old, new) = (support.join("MuskFlow"), support.join("Umless"));
+    if old.is_dir() && !new.exists() {
+        match std::fs::rename(&old, &new) {
+            Ok(()) => eprintln!(
+                "· moved your data from {} to {}",
+                old.display(),
+                new.display()
+            ),
+            Err(e) => eprintln!("· could not move {}: {e}", old.display()),
+        }
+    }
 }
 
 pub fn run(c: &Common, device: Option<&str>) -> Result<()> {
+    move_old_data();
     let mut c = c.clone();
     let settings = Settings::load();
     // A tier picked in the window wins over the one the app was built with, if installed.
@@ -104,7 +124,7 @@ pub fn run(c: &Common, device: Option<&str>) -> Result<()> {
         models: c.models.clone(),
         settings: settings.clone(),
     };
-    let config = mf_shell::Config {
+    let config = umless_shell::Config {
         dictionary: dict_path,
         tier: c.tier.to_string(),
         html: include_str!("ui/index.html"),
@@ -112,7 +132,7 @@ pub fn run(c: &Common, device: Option<&str>) -> Result<()> {
         // Double-clicked: show the window, like any app. From a terminal: stay in the menu bar.
         open_window: in_app_bundle(),
     };
-    mf_shell::run(config, move |ui| {
+    umless_shell::run(config, move |ui| {
         if let Err(e) = dictate_loop(&c, device.as_deref(), &settings, &ui) {
             eprintln!("Error: {e:#}");
             ui.set(State::Error(format!("{e:#}")));
@@ -154,7 +174,7 @@ fn dictate_loop(c: &Common, device: Option<&str>, settings: &Settings, ui: &Ui) 
         Some(load_cleaner(c, &llm_path(c, c.tier))?)
     } else {
         eprintln!(
-            "· no cleanup model for the {} tier; using rules only (muskflow models install {})",
+            "· no cleanup model for the {} tier; using rules only (umless models install {})",
             c.tier, c.tier
         );
         None
@@ -192,14 +212,14 @@ fn dictate_loop(c: &Common, device: Option<&str>, settings: &Settings, ui: &Ui) 
             pending = None;
         }
         // Where the text will go, read now, while that app is still in front.
-        let focus = mf_context::focused();
+        let focus = umless_context::focused();
         // The text on screen, read while the user speaks.
         let screen_reader = focus
             .as_ref()
             .filter(|_| settings.screen_context() || mode == Mode::Command)
             .map(|f| {
                 let pid = f.pid;
-                std::thread::spawn(move || mf_context::screen(pid))
+                std::thread::spawn(move || umless_context::screen(pid))
             });
         let style = pick_style(c, settings, focus.as_ref(), None);
         ui.set(State::Listening {
@@ -275,7 +295,7 @@ fn dictate_loop(c: &Common, device: Option<&str>, settings: &Settings, ui: &Ui) 
         if final_mode == Mode::Command {
             let Some(cl) = cleaner.as_ref() else {
                 ui.set(State::Error(format!(
-                    "Command mode needs the {} tier's language model: muskflow models install {}",
+                    "Command mode needs the {} tier's language model: umless models install {}",
                     c.tier, c.tier
                 )));
                 continue;
@@ -300,7 +320,7 @@ fn dictate_loop(c: &Common, device: Option<&str>, settings: &Settings, ui: &Ui) 
         if let Some(cl) = cleaner.as_mut() {
             match &screen {
                 Some(sc) => cl.set_dictionary(
-                    dict.with_screen_terms(mf_context::text::names(&sc.all_text())),
+                    dict.with_screen_terms(umless_context::text::names(&sc.all_text())),
                 ),
                 None => cl.set_dictionary(dict.clone()),
             }
@@ -311,10 +331,10 @@ fn dictate_loop(c: &Common, device: Option<&str>, settings: &Settings, ui: &Ui) 
                 Ok(cd) => cd.text,
                 Err(e) => {
                     log::warn!("cleanup failed: {e:#}");
-                    mf_cleanup::rules::clean(&dict.apply(&raw))
+                    umless_cleanup::rules::clean(&dict.apply(&raw))
                 }
             },
-            None => mf_cleanup::rules::clean(&dict.apply(&raw)),
+            None => umless_cleanup::rules::clean(&dict.apply(&raw)),
         };
         let clean_time = t.elapsed();
         if text.is_empty() {
@@ -323,7 +343,7 @@ fn dictate_loop(c: &Common, device: Option<&str>, settings: &Settings, ui: &Ui) 
             continue;
         }
         // A trailing space so the next dictation doesn't run into this one.
-        match mf_insert::insert(&format!("{text} ")) {
+        match umless_insert::insert(&format!("{text} ")) {
             Ok(()) => {
                 let latency = rec.stopped.elapsed();
                 let entry = Entry {
@@ -386,7 +406,7 @@ fn run_command(
 ) {
     // Apps that don't expose their text field: ask them for the selection with ⌘C.
     let copied = if screen.selection.is_none() && !screen.readable {
-        mf_insert::copy_selection()
+        umless_insert::copy_selection()
     } else {
         None
     };
@@ -396,7 +416,7 @@ fn run_command(
     let style = settings
         .style()
         .unwrap_or_else(|| focus.map(|f| f.style_for(screen)).unwrap_or_default());
-    let cx = mf_cleanup::command::Context {
+    let cx = umless_cleanup::command::Context {
         app: app.as_deref(),
         style,
         selection,
@@ -417,7 +437,7 @@ fn run_command(
         }
     };
     // Replacing a selection: paste over it. New text: paste at the cursor.
-    if let Err(e) = mf_insert::insert(&out.text) {
+    if let Err(e) = umless_insert::insert(&out.text) {
         eprintln!("→ {e:#}\n  {}", out.text);
         ui.set(State::Error(format!("{e:#}")));
         return;
@@ -449,10 +469,10 @@ fn run_command(
     );
 }
 
-/// Looks at the field MuskFlow last typed into; words the user fixed go into the dictionary.
+/// Looks at the field Umless last typed into; words the user fixed go into the dictionary.
 fn check_corrections(
     pending: &mut Option<Pending>,
-    dict: &mut mf_cleanup::Dictionary,
+    dict: &mut umless_cleanup::Dictionary,
     path: &Path,
     ui: &Ui,
 ) {
@@ -460,7 +480,7 @@ fn check_corrections(
         return;
     };
     p.checks += 1;
-    let Some(field) = mf_context::field_text(p.pid) else {
+    let Some(field) = umless_context::field_text(p.pid) else {
         return;
     };
     let words = learn::corrections(&p.typed, &field, dict);
@@ -473,7 +493,7 @@ fn check_corrections(
     match learn::save(path, &words) {
         Ok(()) => {
             // The dictionary file's change is picked up before the next dictation.
-            *dict = mf_cleanup::Dictionary::new(
+            *dict = umless_cleanup::Dictionary::new(
                 dict.terms().map(String::from).chain(words.iter().cloned()),
             );
             eprintln!("· learned from your correction: {}", words.join(", "));
@@ -499,30 +519,30 @@ fn modified(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path).and_then(|m| m.modified()).ok()
 }
 
-/// Starts the Fn watcher once Input Monitoring is allowed. Inside MuskFlow.app the setup
+/// Starts the Fn watcher once Input Monitoring is allowed. Inside Umless.app the setup
 /// screen walks the user through it, so this waits instead of failing; from a terminal it
 /// asks for the permissions and explains where they go.
 fn start_hotkey(ui: &Ui) -> Result<crossbeam_channel::Receiver<Event>> {
     if !in_app_bundle() {
-        if !mf_insert::has_permission() {
-            mf_insert::request_permission();
+        if !umless_insert::has_permission() {
+            umless_insert::request_permission();
             eprintln!(
-                "· MuskFlow needs Accessibility to type into other apps: System Settings → Privacy & Security → Accessibility."
+                "· Umless needs Accessibility to type into other apps: System Settings → Privacy & Security → Accessibility."
             );
         }
-        if !mf_hotkey::has_permission() {
-            mf_hotkey::request_permission();
+        if !umless_hotkey::has_permission() {
+            umless_hotkey::request_permission();
             anyhow::bail!(
-                "Allow Input Monitoring for the app you run MuskFlow in (System Settings → Privacy & Security → Input Monitoring), then restart that app. Use macOS Terminal: apps that host a terminal, like Claude, need a full restart."
+                "Allow Input Monitoring for the app you run Umless in (System Settings → Privacy & Security → Input Monitoring), then restart that app. Use macOS Terminal: apps that host a terminal, like Claude, need a full restart."
             );
         }
     }
-    if !mf_hotkey::has_permission() {
+    if !umless_hotkey::has_permission() {
         ui.set(State::Setup);
-        eprintln!("· waiting for Input Monitoring (finish setup in the MuskFlow window)");
-        while !mf_hotkey::has_permission() {
+        eprintln!("· waiting for Input Monitoring (finish setup in the Umless window)");
+        while !umless_hotkey::has_permission() {
             std::thread::sleep(std::time::Duration::from_secs(1));
         }
     }
-    mf_hotkey::start()
+    umless_hotkey::start()
 }

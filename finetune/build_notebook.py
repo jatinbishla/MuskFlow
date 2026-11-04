@@ -1,4 +1,4 @@
-"""Builds MuskFlow_Lite_finetune.ipynb: a self-contained Colab notebook that embeds
+"""Builds Umless_Lite_finetune.ipynb: a self-contained Colab notebook that embeds
 lite_cleanup.py and the held-out benchmark text, so it needs nothing from this repo.
 
     python3 build_notebook.py
@@ -31,9 +31,9 @@ def writefile(name, body):
 
 cells = [
     md("""
-# MuskFlow Lite: fine-tune round 3
+# Umless Lite: fine-tune round 3
 
-Teaches Qwen3.5-0.8B (MuskFlow's Lite model) to turn Lite's raw speech transcript into the text you meant, in four modes:
+Teaches Qwen3.5-0.8B (Umless's Lite model) to turn Lite's raw speech transcript into the text you meant, in four modes:
 - **clean:** minimal edits
 - **formal:** polished writing for email and Teams
 - **prompt:** a concise instruction for Claude, ChatGPT or a coding agent
@@ -49,7 +49,7 @@ It also adds command-mode examples.
 
 **Start:** *Runtime → Change runtime type → T4 GPU*, then *Runtime → Run all*. Approve the Google Drive pop-up right away (first cell). After that it needs nothing from you for about 3 hours. Keep this tab in front and the laptop awake.
 
-**If Colab disconnects:** click *Reconnect*, then *Run all* again. Everything is saved to Google Drive (`MyDrive/muskflow/work-r3/`) as it goes, so finished steps are skipped and training resumes from its last checkpoint.
+**If Colab disconnects:** click *Reconnect*, then *Run all* again. Everything is saved to Google Drive (`MyDrive/umless/work-r3/`) as it goes, so finished steps are skipped and training resumes from its last checkpoint.
 
 | Step | Time on a T4 |
 |---|---|
@@ -62,7 +62,7 @@ It also adds command-mode examples.
 | 7. Fine-tune | ~90–100 min |
 | 8. Merge, check each mode on held-out pairs, convert to GGUF Q4_K_M | ~8 min |
 
-The result is `MyDrive/muskflow/MuskFlow-Lite-0.8B-r3-Q4_K_M.gguf` (~520 MB). Put it in MuskFlow's `models/` folder.
+The result is `MyDrive/umless/Umless-Lite-0.8B-r3-Q4_K_M.gguf` (~520 MB). Put it in Umless's `models/` folder.
 """),
     md("## 1. Connect Drive and install"),
     code("""
@@ -80,7 +80,10 @@ def sh(cmd):
 
 from google.colab import drive
 drive.mount('/content/drive')
-OUT = '/content/drive/MyDrive/muskflow'
+OUT = '/content/drive/MyDrive/umless'
+# Umless was called MuskFlow: keep using an earlier run's Drive folder, so its work resumes.
+if not os.path.exists(OUT) and os.path.exists('/content/drive/MyDrive/muskflow'):
+    OUT = '/content/drive/MyDrive/muskflow'
 W = f'{OUT}/work-r3'   # every step saves here, so a disconnect loses nothing
 !mkdir -p "{W}"
 # Reuse round 2's messages and style pairs instead of writing them again.
@@ -135,9 +138,9 @@ sh(f'head -n 4 "{W}/pairs.jsonl"; tail -n 4 "{W}/pairs.jsonl"')
 sh(f'python lite_cleanup.py export --work "{W}"')
 sh(f'python lite_cleanup.py check --work "{W}" --n 300')
 sh(f'python llama.cpp/convert_hf_to_gguf.py "{W}/merged" --outtype f16 --outfile /content/lite-f16.gguf')
-sh(f'llama.cpp/build/bin/llama-quantize /content/lite-f16.gguf "{OUT}/MuskFlow-Lite-0.8B-r3-Q4_K_M.gguf" Q4_K_M')
+sh(f'llama.cpp/build/bin/llama-quantize /content/lite-f16.gguf "{OUT}/Umless-Lite-0.8B-r3-Q4_K_M.gguf" Q4_K_M')
 sh(f'ls -lh "{OUT}"')
-print("Done. Download MuskFlow-Lite-0.8B-r3-Q4_K_M.gguf from Google Drive → muskflow/ into MuskFlow's models/ folder.")
+print("Done. Download Umless-Lite-0.8B-r3-Q4_K_M.gguf from Google Drive → umless/ into Umless's models/ folder.")
 """),
 ]
 
@@ -152,6 +155,6 @@ nb = {
     },
     "cells": cells,
 }
-out = HERE / "MuskFlow_Lite_finetune.ipynb"
+out = HERE / "Umless_Lite_finetune.ipynb"
 out.write_text(json.dumps(nb, indent=1))
 print(f"wrote {out}")

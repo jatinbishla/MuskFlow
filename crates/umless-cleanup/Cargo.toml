@@ -1,0 +1,12 @@
+[package]
+name = "umless-cleanup"
+description = "Turns raw dictation into clean text: rules, LLM prompt, faithfulness guard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+log.workspace = true
+umless-llm.workspace = true
+umless-eval.workspace = true

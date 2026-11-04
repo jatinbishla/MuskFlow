@@ -1,5 +1,5 @@
 //! Dictation history, kept only on this Mac: one JSON object per line in
-//! `~/Library/Application Support/MuskFlow/history.jsonl`. Shown in the MuskFlow window.
+//! `~/Library/Application Support/Umless/history.jsonl`. Shown in the Umless window.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -49,7 +49,7 @@ impl History {
         let home = std::env::var_os("HOME")
             .map(PathBuf::from)
             .unwrap_or_default();
-        home.join("Library/Application Support/MuskFlow/history.jsonl")
+        home.join("Library/Application Support/Umless/history.jsonl")
     }
 
     pub fn now_ms() -> u64 {
@@ -130,7 +130,7 @@ mod tests {
 
     #[test]
     fn appends_loads_newest_first_and_deletes() {
-        let dir = std::env::temp_dir().join(format!("mf-history-{}", History::now_ms()));
+        let dir = std::env::temp_dir().join(format!("umless-history-{}", History::now_ms()));
         let h = History::new(dir.join("history.jsonl"));
         h.append(&entry(1, "first")).unwrap();
         h.append(&entry(2, "second words here")).unwrap();

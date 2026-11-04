@@ -107,12 +107,12 @@ The same 11 clips and dictionary as docs/bench/2026-11-03-dictionary-tiers.md, L
 
 WER ignores case, punctuation, number formatting and fillers. Final WER also counts uncorrected self-corrections ("Thursday, no wait, Friday" should become "Friday") and anything the LLM added.
 
-## MuskFlow-Lite-Cleanup-0.8B (round 1, compact prompt)
+## Umless-Lite-Cleanup-0.8B (round 1, compact prompt)
 ## Tier comparison (fast replay)
 
 | Tier | Models | Size | Load | **Final WER** (vs meant) | Gap | Rules-only WER | ASR WER (vs said) | Gap | Key-up → text p50 / max | Cleanup p50 | Guard fallbacks | CPU while speaking |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| **lite** | Parakeet-TDT 110M int8 (English) + MuskFlow-Lite-Cleanup-0.8B-Q4_K_M | 678 MB | 0.9 s | **6.9%** | — | 9.3% | 9.2% | — | 386 / 725 ms | 294 ms | 1/11 | 9% |
+| **lite** | Parakeet-TDT 110M int8 (English) + Umless-Lite-Cleanup-0.8B-Q4_K_M | 678 MB | 0.9 s | **6.9%** | — | 9.3% | 9.2% | — | 386 / 725 ms | 294 ms | 1/11 | 9% |
 
 ### Per clip: final WER (ASR WER)
 

@@ -1,4 +1,4 @@
-//! Learning from corrections: when the user fixes a word MuskFlow typed ("Pria" →
+//! Learning from corrections: when the user fixes a word Umless typed ("Pria" →
 //! "Priya"), the fix goes into their dictionary, so the next dictation gets it right.
 //!
 //! After typing, the field is read again a few times over the next minute and a half
@@ -8,8 +8,8 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use mf_cleanup::Dictionary;
-use mf_cleanup::guard::is_everyday_word;
+use umless_cleanup::Dictionary;
+use umless_cleanup::guard::is_everyday_word;
 
 /// When to look at the field again, after typing into it.
 pub const CHECKS: [Duration; 3] = [
@@ -21,7 +21,7 @@ pub const CHECKS: [Duration; 3] = [
 /// More edits than this share of the typed words means it isn't the same text any more.
 const MAX_CHANGED_SHARE: f32 = 0.4;
 
-/// Text MuskFlow typed and is watching for corrections.
+/// Text Umless typed and is watching for corrections.
 pub struct Pending {
     pub pid: i32,
     pub typed: String,
@@ -183,7 +183,7 @@ mod tests {
 
     #[test]
     fn save_adds_a_heading_once() {
-        let dir = std::env::temp_dir().join(format!("mf-learn-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("umless-learn-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("dictionary.txt");
         std::fs::write(&path, "# my terms\nSubFlo\n").unwrap();

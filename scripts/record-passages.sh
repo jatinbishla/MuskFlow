@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Record yourself reading the benchmark passages, so `muskflow bench --clips recordings` tests real voices.
+# Record yourself reading the benchmark passages, so `umless bench --clips recordings` tests real voices.
 #
 #   scripts/record-passages.sh            # all passages
 #   scripts/record-passages.sh read-03    # just the ones matching
@@ -9,7 +9,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BIN="$ROOT/target/release/muskflow"
+BIN="$ROOT/target/release/umless"
 OUT="$ROOT/recordings"
 mkdir -p "$OUT"
 [ -x "$BIN" ] || { echo "build first: cargo build --release" >&2; exit 1; }
