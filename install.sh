@@ -24,6 +24,35 @@ if ! command -v cargo >/dev/null; then
   esac
 fi
 
+# ── 1b. C/C++ build tools (llama.cpp is compiled from source) ────────────────
+if [ "$(uname -s)" = Darwin ] && ! xcode-select -p >/dev/null 2>&1; then
+  say "MuskFlow needs Apple's Command Line Tools (the C compiler). A macOS window will open to install them."
+  xcode-select --install 2>/dev/null || true
+  echo "When that install finishes, run ./install.sh again."
+  exit 1
+fi
+PATH="$PWD/.tools/cmake/bin:$PATH"
+if ! command -v cmake >/dev/null; then
+  if command -v brew >/dev/null; then
+    say "Installing cmake with Homebrew…"
+    brew install cmake
+  elif [ "$(uname -s)" = Darwin ]; then
+    # No Homebrew: Kitware's official build, kept inside this folder (.tools/).
+    CMAKE_VERSION=3.31.6
+    say "Downloading cmake $CMAKE_VERSION (needed to build the AI engine, ~75 MB)…"
+    TMP="$(mktemp -d)"
+    curl -fL --progress-bar -o "$TMP/cmake.tar.gz" \
+      "https://github.com/Kitware/CMake/releases/download/v$CMAKE_VERSION/cmake-$CMAKE_VERSION-macos-universal.tar.gz"
+    tar -xzf "$TMP/cmake.tar.gz" -C "$TMP"
+    rm -rf .tools/cmake && mkdir -p .tools
+    mv "$TMP/cmake-$CMAKE_VERSION-macos-universal/CMake.app/Contents" .tools/cmake
+    rm -rf "$TMP"
+  else
+    echo "Install cmake (e.g. sudo apt install cmake build-essential) and run ./install.sh again."
+    exit 1
+  fi
+fi
+
 # ── 2. Pick tiers ────────────────────────────────────────────────────────────
 ram_gb() {
   case "$(uname -s)" in

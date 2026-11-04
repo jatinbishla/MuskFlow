@@ -148,3 +148,32 @@ Full report: [bench/2026-11-04-lite-finetune-r1.md](bench/2026-11-04-lite-finetu
 - phrase-level corrections;
 - contrastive pairs that keep real "I'm/and/like/on";
 - the formal and AI-prompt styles, so Lite can use them too.
+
+## 2026-11-04: Lite cleanup fine-tune, round 2
+
+Full report: [bench/2026-11-04-lite-finetune-r2.md](bench/2026-11-04-lite-finetune-r2.md). This round adds the phrase-correction, contrastive and style data listed above, and uses compact prompts (about 110 tokens instead of 450).
+
+| Lite cleanup model | Final WER (11 clips) | Cleanup p50 | Guard fallbacks |
+|---|---|---|---|
+| Qwen3.5-0.8B, few-shot (current) | 6.6% | 602 ms | 2/11 |
+| MuskFlow-Lite-0.8B, round 2 | **6.3%** | 705 ms | 2/11 |
+| *Standard / Max, for reference* | *3.6% / 1.5%* | | |
+
+**Clean dictation:** a small win. Round 2 resolves "Thursday, no wait, Friday" in `dictation` (15.4% → 10.3%), which the base model never does, and "Hi, I'm Jatin" is kept.
+
+**Styles (formal, AI prompt), hand-checked on 6 dictations:** not good enough to turn on for Lite.
+
+| | Base 0.8B | Round 2 |
+|---|---|---|
+| "first … second … third" as a prompt | numbered list ✓ | one sentence, adds "web" ✗ |
+| "create an adobe software open source" | ✓ | drops "open source" ✗ |
+| Stripe-webhook bug report as a prompt | ✓ | ✓ |
+| Invoice email to Sarah, formal | ✓ | flips it into "could you send the invoice you sent" ✗ |
+| "thursday no wait friday", formal | keeps Thursday ✗ | Friday ✓ |
+| Clean output capitalisation | ✓ | "friday", "q3" lower-case ✗ |
+
+**Decision:** Lite keeps the base model and keeps falling back to Clean for formal and prompt destinations. Round 3 needs:
+- prompt targets that keep enumerations as lists and never drop qualifiers;
+- formal pairs where a question about something stays that question;
+- properly capitalised clean targets, so case isn't learned from the noisy input;
+- the six real recorded passages (`scripts/record-passages.sh`) as the held-out test.

@@ -19,6 +19,7 @@ APP="dist/MuskFlow.app"
 for dir in "$HOME/.cargo/bin" /opt/homebrew/opt/rustup/bin /usr/local/opt/rustup/bin; do
   [ -x "$dir/cargo" ] && PATH="$dir:$PATH"
 done
+PATH="$PWD/.tools/cmake/bin:$PATH"  # cmake fetched by install.sh when Homebrew is missing
 cargo build --release --quiet
 
 rm -rf "$APP"
