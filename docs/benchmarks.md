@@ -177,3 +177,29 @@ Full report: [bench/2026-11-04-lite-finetune-r2.md](bench/2026-11-04-lite-finetu
 - formal pairs where a question about something stays that question;
 - properly capitalised clean targets, so case isn't learned from the noisy input;
 - the six real recorded passages (`scripts/record-passages.sh`) as the held-out test.
+
+## 2026-11-06: Lite cleanup fine-tune, round 3
+
+Round 3 added command-mode examples, list/question-preserving style filters and case-loss noise. Lite now loads the newest `Umless-Lite-*-rN` file in `models/` by default. These runs also include the new deterministic digits and self-correction rules (which apply to every tier).
+
+**Dictation, 11 synthetic clips (with `bench/dictionary.txt`):**
+
+| Lite cleanup model | Final WER | Guard fallbacks |
+|---|---|---|
+| Qwen3.5-0.8B base | 6.6% | 2/11 |
+| Round 1 | 6.9% | 1/11 |
+| Round 2 | **6.3%** | 2/11 |
+| Round 3 | 6.6% | 3/11 |
+| *Standard / Max, for reference* | *3.6% / 1.5%* | *0 / 0* |
+
+**30-case text suite** (fillers, corrections, numbers, questions, no-answer, names, prompt, formal, casual; automatic checks), passes:
+
+| | Base | r1 | r2 | r3 | Standard | Max |
+|---|---|---|---|---|---|---|
+| All | 21 | 19 | 18 | 20 | 21 | 23 |
+| Questions keep "?" | 2/3 | 0/3 | 0/3 | 1/3 | 2/3 | 2/3 |
+| Prompt style | 4/6 | 3/6 | 3/6 | 2/6 | 4/6 | 5/6 |
+
+**Command mode (6 hand-checked tasks):** round 3 is the best Lite model so far: the Gmail reply addresses the right person and invents nothing (round 2 invented "Priya from Turner Construction"), the Slack reply keeps 1:30, and it runs about twice as fast because it needs no few-shot examples. Hindi translation is still poor on every tier.
+
+**Decision:** round 3 becomes Lite's default for dictation and command mode. Formal and prompt destinations keep falling back to Clean on Lite: numbered lists are still flattened, and "fix it" was dropped from one bug report. The fine-tunes also lose trailing question marks more often than the base model, which a deterministic rule can fix.
