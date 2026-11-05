@@ -108,12 +108,10 @@ pub fn run(
                 (Some(cd), Some(reference)) => Some(wer(reference, &cd.text)),
                 _ => None,
             };
-            let rules_wer = clip.clean.as_ref().map(|reference| {
-                wer(
-                    reference,
-                    &umless_cleanup::rules::clean(&dict.apply(&asr.text)),
-                )
-            });
+            let rules_wer = clip
+                .clean
+                .as_ref()
+                .map(|reference| wer(reference, &umless_cleanup::without_llm(&asr.text, &dict)));
             let r = ClipResult {
                 asr,
                 asr_wer,

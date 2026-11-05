@@ -9,6 +9,7 @@
 pub mod command;
 pub mod dictionary;
 pub mod guard;
+pub mod numbers;
 pub mod rules;
 
 use std::time::{Duration, Instant};
@@ -246,7 +247,7 @@ impl Cleaner {
     /// Command mode: carries out a spoken instruction on the selection or at the cursor.
     /// The instruction gets the same dictionary and filler cleanup as dictation first.
     pub fn command(&self, raw: &str, cx: &command::Context) -> Result<command::Commanded> {
-        let instruction = rules::clean(&self.dictionary.apply(raw));
+        let instruction = rules::clean(&rules::retract(&self.dictionary.apply(raw)));
         let mut out = command::run(&self.llm, &instruction, cx)?;
         out.text = self.dictionary.apply(&out.text);
         Ok(out)
@@ -260,8 +261,8 @@ impl Cleaner {
     /// invented names and numbers rather than word-for-word, since they rephrase.
     pub fn clean_as(&self, raw: &str, style: Style) -> Result<Cleaned> {
         let t = Instant::now();
-        let raw = &self.dictionary.apply(raw);
-        let ruled = rules::clean(raw);
+        let raw = &rules::retract(&self.dictionary.apply(raw));
+        let ruled = numbers::to_digits(&rules::clean(raw));
         if ruled.is_empty() || !needs_llm(raw) {
             return Ok(Cleaned {
                 text: ruled,
@@ -273,6 +274,8 @@ impl Cleaner {
             });
         }
 
+        // Digits going in help the LLM keep them; the words still decide whether it runs.
+        let raw = &numbers::to_digits(raw);
         let (prefix, suffix) = match (self.round, style) {
             (Some(r), _) if r >= 2 => build_compact_prompt(raw, style),
             (Some(_), Style::Clean | Style::Casual) => build_compact_prompt(raw, Style::Clean),
@@ -284,7 +287,9 @@ impl Cleaner {
             raw.split_whitespace().count() * 2 + if style.rewrites() { 64 } else { 32 };
         let generation = self.llm.complete(&prefix, &suffix, max_tokens)?;
         // The LLM sometimes "corrects" a name back to a common spelling, or leaves an "um".
-        let llm_text = rules::strip_fillers(&self.dictionary.apply(generation.text.trim()));
+        let llm_text = numbers::to_digits(&rules::strip_fillers(
+            &self.dictionary.apply(generation.text.trim()),
+        ));
         let verdict = if style.rewrites() {
             let kind = if style == Style::Prompt {
                 guard::Rewrite::Restate
@@ -310,6 +315,12 @@ impl Cleaner {
             time: t.elapsed(),
         })
     }
+}
+
+/// The cleanup that needs no model: dictionary, explicit self-corrections, fillers, digits.
+/// What the app types when no LLM is loaded, and what the guard falls back to.
+pub fn without_llm(raw: &str, dictionary: &Dictionary) -> String {
+    numbers::to_digits(&rules::clean(&rules::retract(&dictionary.apply(raw))))
 }
 
 fn needs_llm(raw: &str) -> bool {

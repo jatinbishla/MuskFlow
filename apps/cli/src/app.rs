@@ -331,10 +331,10 @@ fn dictate_loop(c: &Common, device: Option<&str>, settings: &Settings, ui: &Ui) 
                 Ok(cd) => cd.text,
                 Err(e) => {
                     log::warn!("cleanup failed: {e:#}");
-                    umless_cleanup::rules::clean(&dict.apply(&raw))
+                    umless_cleanup::without_llm(&raw, &dict)
                 }
             },
-            None => umless_cleanup::rules::clean(&dict.apply(&raw)),
+            None => umless_cleanup::without_llm(&raw, &dict),
         };
         let clean_time = t.elapsed();
         if text.is_empty() {
