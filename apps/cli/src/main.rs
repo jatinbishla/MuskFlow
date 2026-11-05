@@ -86,6 +86,10 @@ enum Cmd {
         /// Skip VAD silence trimming.
         #[arg(long)]
         no_vad: bool,
+        /// Also print each word with its start and end time (`start<TAB>end<TAB>word`, seconds).
+        /// Times are from the start of the file only with --no-vad.
+        #[arg(long)]
+        words: bool,
     },
     /// Replay a WAV file as if it were live speech and measure key-up → text latency.
     Stream {
@@ -204,7 +208,11 @@ fn main() -> Result<()> {
         }
     };
     match cmd {
-        Cmd::Transcribe { wavs, no_vad } => transcribe(&cli.common, wavs, *no_vad),
+        Cmd::Transcribe {
+            wavs,
+            no_vad,
+            words,
+        } => transcribe(&cli.common, wavs, *no_vad, *words),
         Cmd::Stream { wav, fast } => stream(&cli.common, wav, *fast),
         Cmd::Listen { mic, save } => listen(&cli.common, mic.as_deref(), save.as_deref()),
         Cmd::App { mic } => app::run(&cli.common, mic.as_deref()),
@@ -446,7 +454,7 @@ pub(crate) fn load_vad(c: &Common) -> Result<SpeechTrimmer> {
     SpeechTrimmer::load(&c.models.join("silero_vad.onnx"), VadConfig::default())
 }
 
-fn transcribe(c: &Common, wavs: &[PathBuf], no_vad: bool) -> Result<()> {
+fn transcribe(c: &Common, wavs: &[PathBuf], no_vad: bool, words: bool) -> Result<()> {
     let engine = load_engine(c, &asr_dir(c))?;
     let asr = engine
         .transcriber()
@@ -484,6 +492,11 @@ fn transcribe(c: &Common, wavs: &[PathBuf], no_vad: bool) -> Result<()> {
         let dt = t.elapsed();
 
         println!("{}", dict.apply(&hyp.text()));
+        if words {
+            for w in &hyp.words {
+                println!("{:.3}\t{:.3}\t{}", w.start, w.end, w.text);
+            }
+        }
         eprintln!(
             "· audio {:.2}s → speech {:.2}s · vad {} · decode {} · {:.0}× real time",
             samples_to_secs(pcm.len()),
