@@ -98,7 +98,7 @@ impl Hub {
                 "version": env!("CARGO_PKG_VERSION"),
                 "tier": self.tier.to_string(),
                 "speech": self.tier.asr_label(),
-                "cleanup": self.tier.llm_label(),
+                "cleanup": self.tier.llm_label_in(&self.models),
                 "login": umless_shell::launch_at_login(),
                 "screen_context": self.settings.screen_context(),
                 "learning": self.settings.learning(),
@@ -126,7 +126,7 @@ impl Hub {
                     .map(|t| json!({
                         "name": t.to_string(),
                         "speech": t.asr_label(),
-                        "cleanup": t.llm_label(),
+                        "cleanup": t.llm_label_in(&self.models),
                         "installed": t.is_installed(&self.models),
                         "current": *t == self.tier,
                     }))

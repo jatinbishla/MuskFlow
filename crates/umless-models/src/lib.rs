@@ -88,8 +88,26 @@ impl Tier {
         }
     }
 
+    /// The cleanup LLM to load. Lite uses Umless's own fine-tune when one is in the models
+    /// folder (the newest round), and the stock model otherwise.
     pub fn llm_path(self, models: &Path) -> PathBuf {
+        if self == Tier::Lite
+            && let Some(file) = newest_fine_tune(models)
+        {
+            return file;
+        }
         models.join(self.llm().1)
+    }
+
+    /// [`Tier::llm_label`], naming the fine-tune when Lite uses one.
+    pub fn llm_label_in(self, models: &Path) -> String {
+        match (self, newest_fine_tune(models)) {
+            (Tier::Lite, Some(file)) => {
+                let round = fine_tune_round(&file.to_string_lossy()).unwrap_or(1);
+                format!("Umless Lite r{round} (fine-tuned {})", self.llm_label())
+            }
+            _ => self.llm_label().to_string(),
+        }
     }
 
     /// Everything this tier needs on disk.
@@ -152,6 +170,34 @@ impl FromStr for Tier {
     }
 }
 
+/// The training round in a Umless fine-tune's file name: "Umless-Lite-0.8B-r3-Q4_K_M.gguf"
+/// is 3, one without `-rN` is round 1. `None` for other files. Fine-tunes made before the
+/// rename are called "MuskFlow-…".
+fn fine_tune_round(path: &str) -> Option<u32> {
+    let name = Path::new(path).file_name()?.to_str()?.to_lowercase();
+    let lite = name.starts_with("umless-lite") || name.starts_with("muskflow-lite");
+    if !lite || !name.ends_with(".gguf") {
+        return None;
+    }
+    let round = name
+        .trim_end_matches(".gguf")
+        .split('-')
+        .find_map(|part| part.strip_prefix('r')?.parse().ok())
+        .unwrap_or(1);
+    Some(round)
+}
+
+/// The newest-round Lite fine-tune in the models folder.
+fn newest_fine_tune(models: &Path) -> Option<PathBuf> {
+    std::fs::read_dir(models)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter_map(|p| Some((fine_tune_round(p.to_str()?)?, p)))
+        .max_by_key(|(round, _)| *round)
+        .map(|(_, p)| p)
+}
+
 /// Total size of a model directory on disk, in bytes.
 pub fn dir_size(path: &Path) -> u64 {
     let Ok(entries) = std::fs::read_dir(path) else {
@@ -170,4 +216,37 @@ pub fn dir_size(path: &Path) -> u64 {
             _ => 0,
         })
         .sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lite_uses_the_newest_fine_tune() {
+        let dir = std::env::temp_dir().join(format!("umless-models-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(
+            Tier::Lite.llm_path(&dir),
+            dir.join("Qwen3.5-0.8B-Q4_K_M.gguf")
+        );
+        for f in [
+            "Umless-Lite-Cleanup-0.8B-Q4_K_M.gguf",
+            "Umless-Lite-0.8B-r3-Q4_K_M.gguf",
+            "Umless-Lite-0.8B-r2-Q4_K_M.gguf",
+        ] {
+            std::fs::write(dir.join(f), "").unwrap();
+        }
+        assert_eq!(
+            Tier::Lite.llm_path(&dir),
+            dir.join("Umless-Lite-0.8B-r3-Q4_K_M.gguf")
+        );
+        assert!(Tier::Lite.llm_label_in(&dir).starts_with("Umless Lite r3"));
+        // Other tiers keep their stock models.
+        assert_eq!(
+            Tier::Max.llm_path(&dir),
+            dir.join("Qwen3-4B-Instruct-2507-Q4_K_M.gguf")
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
