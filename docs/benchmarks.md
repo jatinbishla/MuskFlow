@@ -203,3 +203,17 @@ Round 3 added command-mode examples, list/question-preserving style filters and 
 **Command mode (6 hand-checked tasks):** round 3 is the best Lite model so far: the Gmail reply addresses the right person and invents nothing (round 2 invented "Priya from Turner Construction"), the Slack reply keeps 1:30, and it runs about twice as fast because it needs no few-shot examples. Hindi translation is still poor on every tier.
 
 **Decision:** round 3 becomes Lite's default for dictation and command mode. Formal and prompt destinations keep falling back to Clean on Lite: numbered lists are still flattened, and "fix it" was dropped from one bug report. The fine-tunes also lose trailing question marks more often than the base model, which a deterministic rule can fix.
+
+## 2026-11-07: Max phrase cap 8 s → 4 s, and the AI-prompt USP test
+
+Real-time bench (key-up → text p50 / max, final WER):
+
+| Tier | Before | After |
+|---|---|---|
+| Lite | 452 / 828 ms, 6.6% | 355 / 754 ms, 6.6% |
+| Standard | 929 / 1645 ms, 3.6% | 760 / 1533 ms, 3.6% |
+| Max | 2911 / 4142 ms, 1.5% | **1250 / 3351 ms, 1.8%** |
+
+Max was slow because Whisper (CPU, ~1.5 s per decode) still had the whole last phrase, up to 8 s of it, to decode at key-up. With 4 s phrases most of it is decoded while you speak. Below ~3 s, forced splits cut words (7.5% WER at 2.5 s). The cleanup LLM was already fast (~0.5 s, Metal, cached system prompt).
+
+AI-prompt mode on 12 rambling spoken requests (o200k tokens, raw speech → typed prompt): Standard 435 → 367 (−16%), Max 435 → 375 (−14%), 11/12 rewritten on both. Lite types plain cleanup in AI apps (its 0.8B model answers long requests instead of rewriting them; the guard catches it). Blind A/B (Claude answering each version separately, a third judge scoring against what was actually said): Umless prompts won 4, raw won 3, 5 ties; average score 7.5 vs 7.75. Both losses were rewrites that changed meaning ("plus nine one" → "91", "I'll paste a transcript" → "Paste the transcript"), since fixed.

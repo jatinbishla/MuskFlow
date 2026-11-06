@@ -106,8 +106,10 @@ pub enum Engine {
     Streaming(StreamingParakeet),
 }
 
-/// Longest phrase decoded in one go when the speaker never pauses.
-const MAX_PHRASE_SECS: f32 = 8.0;
+/// Longest phrase decoded in one go when the speaker never pauses. Short enough that the
+/// phrase still open at key-up is small (Whisper on CPU costs ~1.5 s per decode); below ~3 s,
+/// forced splits start cutting words (WER 1.5% → 7.5% at 2.5 s).
+const MAX_PHRASE_SECS: f32 = 4.0;
 /// Speech segments only need to mark where speech is, so they are never force-split.
 const LONGEST_TAKE_SECS: f32 = 600.0;
 
