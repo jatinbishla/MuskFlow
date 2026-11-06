@@ -268,6 +268,12 @@ const RETRACT_CUES: &[&[&str]] = &[
     &["scratch", "that"],
     &["no", "actually"],
     &["actually", "no"],
+    // "at ten. Actually, make it eleven": only ever replaces a word of the same kind.
+    &["actually", "make", "it"],
+    &["actually", "make", "that"],
+    &["no", "make", "it"],
+    &["no", "make", "that"],
+    &["make", "that"],
 ];
 /// How far back the replaced phrase may start.
 const RETRACT_REACH: usize = 6;
@@ -349,11 +355,13 @@ pub fn retract(raw: &str) -> String {
         // Look back for where the replaced phrase starts, without crossing a sentence.
         let mut anchor = None;
         for k in (i.saturating_sub(RETRACT_REACH)..i).rev() {
-            if toks[k].ends_with(['.', '?', '!']) {
-                break;
-            }
+            // The word right before the cue may end a sentence ("at ten. Actually, make it
+            // eleven"); nothing further back may.
             if same_slot(&words[k], first) {
                 anchor = Some(k);
+                break;
+            }
+            if toks[k].ends_with(['.', '?', '!']) {
                 break;
             }
         }
@@ -371,11 +379,21 @@ pub fn retract(raw: &str) -> String {
             .chars()
             .find(|c| c.is_alphanumeric())
             .is_some_and(char::is_uppercase);
-        let fixed = if capital {
+        let mut fixed = if capital {
             capitalize_first(&toks[fix])
         } else {
             toks[fix].clone()
         };
+        // "at ten. Actually, make it eleven I have…" → "at eleven. I have…"
+        if let Some(end) = toks[a]
+            .chars()
+            .last()
+            .filter(|c| matches!(c, '.' | '?' | '!'))
+            && fixed.ends_with(char::is_alphanumeric)
+            && fix + 1 < toks.len()
+        {
+            fixed.push(end);
+        }
         toks.splice(a..=fix, [format!("{lead}{fixed}")]);
         i = a + 1;
     }
@@ -408,6 +426,23 @@ mod tests {
         assert_eq!(
             strip_fillers("Haha yeah, um, I'm late.\n1. Grab a table, uh, please."),
             "Haha yeah, I'm late.\n1. Grab a table, please."
+        );
+    }
+
+    #[test]
+    fn corrections_after_a_full_stop() {
+        assert_eq!(
+            retract("Let's sync tomorrow at ten. Actually make it eleven I have a call at 10."),
+            "Let's sync tomorrow at eleven. I have a call at 10."
+        );
+        assert_eq!(
+            retract("by next Tuesday. No wait, Wednesday, sorry."),
+            "by next Wednesday, sorry."
+        );
+        // "make it" with nothing of the same kind before it is an instruction, not a fix.
+        assert_eq!(
+            retract("Build the app. Actually make it secure."),
+            "Build the app. Actually make it secure."
         );
     }
 
