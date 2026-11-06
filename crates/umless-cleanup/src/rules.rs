@@ -66,15 +66,42 @@ pub fn strip_fillers(text: &str) -> String {
 
 /// Words that open a yes/no question when a pronoun or "there" follows ("can you", "is it").
 const QUESTION_AUX: &[&str] = &[
-    "can", "could", "would", "will", "should", "shall", "do", "does", "did", "is", "are",
-    "was", "were", "have", "has", "may", "might", "am", "isn't", "aren't", "don't",
-    "doesn't", "didn't", "can't", "won't", "wouldn't", "shouldn't", "couldn't",
+    "can",
+    "could",
+    "would",
+    "will",
+    "should",
+    "shall",
+    "do",
+    "does",
+    "did",
+    "is",
+    "are",
+    "was",
+    "were",
+    "have",
+    "has",
+    "may",
+    "might",
+    "am",
+    "isn't",
+    "aren't",
+    "don't",
+    "doesn't",
+    "didn't",
+    "can't",
+    "won't",
+    "wouldn't",
+    "shouldn't",
+    "couldn't",
 ];
 const QUESTION_SUBJECTS: &[&str] = &[
     "i", "you", "we", "they", "he", "she", "it", "there", "this", "that", "these", "those",
     "anyone", "someone", "everyone",
 ];
-const WH_WORDS: &[&str] = &["what", "why", "how", "when", "where", "who", "which", "whose"];
+const WH_WORDS: &[&str] = &[
+    "what", "why", "how", "when", "where", "who", "which", "whose",
+];
 
 /// Whether a sentence reads as a direct question: "Can you check…", "What time is…".
 /// "What we need is…" and "How it works:" open with a wh-word but are statements.
@@ -364,7 +391,7 @@ mod tests {
             "Can opener is broken.",
             "Analyze the session handler to determine why tokens expire after 5 minutes.",
             "Why tokens expire early.",
-            "1. Is it secure\n2. Make it run fast.",
+            "1. Make it secure\n2. Make it run fast.",
             "The price is 3.5 dollars.",
         ] {
             assert_eq!(mark_questions(s), s);

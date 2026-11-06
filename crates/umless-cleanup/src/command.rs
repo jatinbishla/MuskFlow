@@ -24,6 +24,13 @@ Rules:
 /// Worked examples (screen, selection, instruction → text), sent as prior turns: small models
 /// copy examples far better than they follow rules.
 const EXAMPLES: &[(&str, Option<&str>, &str, &str)] = &[
+    // A chat reply has no greeting or sign-off.
+    (
+        "#eng\nRohan Gupta: is the staging deploy done? QA is waiting",
+        None,
+        "tell him yes it's live and QA can start",
+        "Yes, it's live on staging. QA can start.",
+    ),
     (
         "Re: Q3 budget\nPriya Nair\nHi Sam,\nCould you share the final Q3 budget numbers before Friday's review?\nThanks,\nPriya",
         None,
@@ -108,14 +115,16 @@ pub fn run(llm: &Llm, instruction: &str, cx: &Context) -> Result<Commanded> {
     let window = fit_tail(llm, cx.window.trim(), &mut budget);
     let suffix = user_turn(instruction, cx, selection.as_deref(), &before, &window);
     let mut generation = llm.complete(&prefix, &suffix, max_tokens)?;
+    let screen = format!("{window}\n{before}");
     if tidy(&generation.text).is_empty() {
         // Non-thinking models (Qwen3-4B-Instruct-2507) sometimes end at once after an empty
         // think block; ask again without it.
         let plain = suffix.replace(THINK_OFF, "");
         generation = llm.complete(&prefix, &plain, max_tokens)?;
     }
+    let text = drop_invented_signoff(&tidy(&generation.text), &screen, cx.style);
     Ok(Commanded {
-        text: tidy(&generation.text),
+        text,
         replaces_selection: selection.is_some(),
         generation,
         time: t.elapsed(),
@@ -175,6 +184,52 @@ fn fit_tail(llm: &Llm, text: &str, budget: &mut usize) -> String {
     text[start..].to_string()
 }
 
+/// Small models copy the sign-off from their examples ("Best,\nSam"). Keep a sign-off
+/// only when the name is on screen (the thread says who the user is), and never in a chat.
+fn drop_invented_signoff(text: &str, screen: &str, style: Style) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let n = lines.len();
+    if n < 3 {
+        return text.to_string();
+    }
+    let name = lines[n - 1].trim();
+    let closing = lines[n - 2].trim().to_lowercase();
+    let is_closing = [
+        "best,",
+        "thanks,",
+        "regards,",
+        "best regards,",
+        "cheers,",
+        "thank you,",
+        "kind regards,",
+    ]
+    .contains(&closing.as_str());
+    let looks_like_name = !name.is_empty()
+        && name.split_whitespace().count() <= 2
+        && name.chars().next().is_some_and(char::is_uppercase)
+        && !name.ends_with(['.', '!', '?']);
+    if !is_closing || !looks_like_name {
+        return text.to_string();
+    }
+    if style != Style::Casual && screen.contains(name) {
+        return text.to_string();
+    }
+    let mut kept = lines[..n - 2].join("\n");
+    if style == Style::Casual {
+        // "Hi Gaurav,\n\n…" in a chat: drop the letter-style greeting too.
+        if let Some((first, rest)) = kept.split_once('\n')
+            && first.trim_end().ends_with(',')
+            && first.split_whitespace().count() <= 3
+            && ["hi", "hey", "hello", "dear"]
+                .iter()
+                .any(|g| first.to_lowercase().starts_with(g))
+        {
+            kept = rest.to_string();
+        }
+    }
+    kept.trim().to_string()
+}
+
 /// Strips what small models wrap their answer in: a "Sure, here's…" line, quotes, fences.
 pub fn tidy(text: &str) -> String {
     let mut t = text.trim();
@@ -213,7 +268,30 @@ pub fn tidy(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::tidy;
+    use super::{Style, drop_invented_signoff, tidy};
+
+    #[test]
+    fn invented_signoffs_are_dropped() {
+        let thread = "Hi Jatin,\nWould Thursday work?\nDaniel";
+        let mail = "Hi Daniel,\n\nYes, Thursday works.\n\nBest,\nJatin";
+        assert_eq!(drop_invented_signoff(mail, thread, Style::Formal), mail);
+        assert_eq!(
+            drop_invented_signoff(
+                "Hi Daniel,\n\nYes, Thursday works.\n\nBest,\nSam",
+                thread,
+                Style::Formal
+            ),
+            "Hi Daniel,\n\nYes, Thursday works."
+        );
+        assert_eq!(
+            drop_invented_signoff(
+                "Hi Gaurav,\n\nIt's fixed and deployed.\n\nBest,\nSam",
+                "Gaurav: export is broken",
+                Style::Casual
+            ),
+            "It's fixed and deployed."
+        );
+    }
 
     #[test]
     fn tidy_strips_wrappers() {

@@ -369,11 +369,53 @@ fn mentions(raw_lower: &str, normalized_raw: &[String], word: &str) -> bool {
     if raw_lower.contains(&w) {
         return true;
     }
+    // "2000-line": each part was said.
+    if w.contains('-') {
+        return w
+            .split('-')
+            .filter(|p| !p.is_empty())
+            .all(|p| mentions(raw_lower, normalized_raw, p));
+    }
     let norm = umless_eval::normalize(word);
-    !norm.is_empty()
+    if !norm.is_empty()
         && normalized_raw
             .windows(norm.len())
             .any(|win| win.iter().zip(&norm).all(|(a, b)| a == b))
+    {
+        return true;
+    }
+    let squashed: String = w.chars().filter(|c| c.is_alphanumeric()).collect();
+    // "my sql" → MySQL, "plus nine one" → +91: the same thing said in pieces.
+    let spoken: String = raw_lower.chars().filter(|c| c.is_alphanumeric()).collect();
+    if squashed.len() >= 2
+        && (spoken.contains(&squashed) || spoken_digits(raw_lower).contains(&squashed))
+    {
+        return true;
+    }
+    // "postgres" → PostgreSQL: the proper name of something the speaker named.
+    raw_lower
+        .split(|c: char| !c.is_alphanumeric())
+        .any(|r| r.len() >= 5 && squashed.starts_with(r) && squashed.len() - r.len() <= 3)
+}
+
+/// The raw text with spoken single digits run together: "plus nine one" → "plus 91".
+fn spoken_digits(raw_lower: &str) -> String {
+    const DIGITS: &[&str] = &[
+        "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+    ];
+    let mut out = String::new();
+    for w in raw_lower.split_whitespace() {
+        let core = w.trim_matches(|c: char| !c.is_alphanumeric());
+        match DIGITS.iter().position(|d| *d == core) {
+            Some(d) => out.push(char::from(b'0' + d as u8)),
+            None => {
+                out.push(' ');
+                out.push_str(core);
+                out.push(' ');
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -405,6 +447,40 @@ mod tests {
             Rewrite::Restate,
         );
         assert!(list.ok(), "{list:?}");
+        for (raw, out) in [
+            (
+                "compare postgres and my sql for a startup",
+                "Compare PostgreSQL and MySQL for a startup.",
+            ),
+            (
+                "a regex for numbers that start with plus nine one",
+                "Write a regex for numbers starting with +91.",
+            ),
+            (
+                "this file is like 2000 lines long split it up",
+                "Split this 2000-line file.",
+            ),
+        ] {
+            let v = check_rewrite(raw, out, Rewrite::Restate);
+            assert!(v.ok(), "{out}: {v:?}");
+        }
+        // Still caught: a name or number nobody said.
+        assert!(
+            !check_rewrite(
+                "compare the two databases",
+                "Compare PostgreSQL and MySQL.",
+                Rewrite::Restate
+            )
+            .ok()
+        );
+        assert!(
+            !check_rewrite(
+                "start with plus nine one",
+                "Start with +44.",
+                Rewrite::Restate
+            )
+            .ok()
+        );
         let lost_name = check_rewrite(
             "hey um Sarah did you get the invoice I sent on Monday",
             "Hey, did you get the invoice I sent on Monday?",
