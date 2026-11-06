@@ -203,13 +203,13 @@ fn tail(s: &str, max: usize) -> String {
 
 #[cfg(target_os = "macos")]
 mod imp {
-    use std::collections::HashSet;
+    use std::collections::HashMap;
     use std::ffi::c_void;
     use std::ptr::NonNull;
     use std::sync::Mutex;
     use std::time::{Duration, Instant};
 
-    use objc2_app_kit::NSWorkspace;
+    use objc2_app_kit::{NSRunningApplication, NSWorkspace};
     use objc2_application_services::{AXError, AXUIElement, AXValue, AXValueType};
     use objc2_core_foundation::{CFArray, CFBoolean, CFRange, CFRetained, CFString, CFType};
 
@@ -253,22 +253,56 @@ mod imp {
         }
     }
 
-    /// Apps that already exposed their content to us (see `expose`).
-    static EXPOSED: Mutex<Option<HashSet<i32>>> = Mutex::new(None);
+    /// When we last asked each app to build its accessibility tree (see `expose`).
+    static ASKED: Mutex<Option<HashMap<i32, Instant>>> = Mutex::new(None);
+    /// Chromium and Electron build the page's tree a second or two after being asked.
+    const WARMUP: Duration = Duration::from_millis(2500);
+    /// How often to ask again when a window shows no page: Chrome turns its tree off
+    /// again after a while without assistive apps.
+    const REASK: Duration = Duration::from_secs(30);
 
-    /// Electron apps (Slack, Teams, VS Code, Discord…) and Chromium build their accessibility
-    /// tree only when asked; this asks, once per process.
-    fn expose(app: &AXUIElement, pid: i32) {
-        let mut seen = EXPOSED.lock().unwrap();
-        if seen.get_or_insert_with(HashSet::new).insert(pid) {
-            // SAFETY: setting a boolean attribute on an element we own; failure is harmless.
-            unsafe {
-                app.set_attribute_value(
-                    &CFString::from_str("AXManualAccessibility"),
-                    CFBoolean::new(true),
-                );
-            }
+    /// Chromium browsers, which ignore Electron's AXManualAccessibility.
+    const CHROMIUM: &[&str] = &[
+        "com.google.Chrome", // and .beta, .dev, .canary
+        "org.chromium.Chromium",
+        "com.brave.Browser",
+        "com.microsoft.edgemac",
+        "company.thebrowser",
+        "com.vivaldi.Vivaldi",
+        "com.operasoftware.Opera",
+    ];
+
+    /// Electron apps (Slack, Teams, VS Code, Discord…) and Chrome build their accessibility
+    /// tree only when asked. Asks at most every `REASK`; returns when we asked, if the app
+    /// is one that answers (so its page may still be on the way).
+    fn expose(app: &AXUIElement, pid: i32) -> Option<Instant> {
+        let mut asked = ASKED.lock().unwrap();
+        let asked = asked.get_or_insert_with(HashMap::new);
+        if let Some(&at) = asked.get(&pid)
+            && at.elapsed() < REASK
+        {
+            return Some(at);
         }
+        let set = |attribute: &str| {
+            // SAFETY: setting a boolean attribute on an element we own; failure is harmless.
+            unsafe { app.set_attribute_value(&CFString::from_str(attribute), CFBoolean::new(true)) }
+        };
+        let answers = set("AXManualAccessibility") == AXError::Success || {
+            // Chrome takes VoiceOver's switch (and reports an error, but turns it on).
+            // Only Chromium: in AppKit apps it slows down window managers' animations.
+            let chromium = NSRunningApplication::runningApplicationWithProcessIdentifier(pid)
+                .and_then(|a| a.bundleIdentifier())
+                .is_some_and(|id| CHROMIUM.iter().any(|c| id.to_string().starts_with(c)));
+            if chromium {
+                set("AXEnhancedUserInterface");
+            }
+            chromium
+        };
+        let now = Instant::now();
+        answers.then(|| {
+            asked.insert(pid, now);
+            now
+        })
     }
 
     fn focused_element(pid: i32) -> Option<CFRetained<AXUIElement>> {
@@ -308,22 +342,29 @@ mod imp {
             }
         }
         // SAFETY: AX calls on elements we own.
-        let window = unsafe {
+        let (app, window) = unsafe {
             let app = AXUIElement::new_application(pid);
             app.set_messaging_timeout(0.2);
-            copy(&app, "AXFocusedWindow").and_then(|w| w.downcast::<AXUIElement>().ok())
+            let window = copy(&app, "AXFocusedWindow");
+            (app, window)
         };
-        if let Some(window) = window {
-            let mut walk = Walk {
-                out: String::new(),
-                web: String::new(),
-                in_web: false,
-                nodes: 0,
-                deadline: Instant::now() + WALK_BUDGET,
-            };
-            walk.visit(&window, 0);
+        if let Some(window) = window.and_then(|w| w.downcast::<AXUIElement>().ok()) {
+            let mut walk = Walk::new(&window);
+            // No page yet: Chrome or an Electron app may still be building it after being asked.
+            if walk.web.is_empty()
+                && let Some(asked) = expose(&app, pid)
+            {
+                while walk.web.is_empty() && asked.elapsed() < WARMUP {
+                    std::thread::sleep(Duration::from_millis(100));
+                    walk = Walk::new(&window);
+                }
+            }
             // In a browser the page is what matters; the tab strip and bookmarks are noise.
-            let text = if walk.web.is_empty() { &walk.out } else { &walk.web };
+            let text = if walk.web.is_empty() {
+                &walk.out
+            } else {
+                &walk.web
+            };
             screen.window = tail(text, WINDOW_CHARS);
         }
         screen
@@ -359,6 +400,18 @@ mod imp {
     }
 
     impl Walk {
+        fn new(window: &AXUIElement) -> Walk {
+            let mut walk = Walk {
+                out: String::new(),
+                web: String::new(),
+                in_web: false,
+                nodes: 0,
+                deadline: Instant::now() + WALK_BUDGET,
+            };
+            walk.visit(window, 0);
+            walk
+        }
+
         fn visit(&mut self, el: &AXUIElement, depth: usize) {
             if depth > MAX_DEPTH || self.nodes >= MAX_NODES || Instant::now() > self.deadline {
                 return;
