@@ -64,6 +64,85 @@ pub fn strip_fillers(text: &str) -> String {
         .join("\n")
 }
 
+/// Words that open a yes/no question when a pronoun or "there" follows ("can you", "is it").
+const QUESTION_AUX: &[&str] = &[
+    "can", "could", "would", "will", "should", "shall", "do", "does", "did", "is", "are",
+    "was", "were", "have", "has", "may", "might", "am", "isn't", "aren't", "don't",
+    "doesn't", "didn't", "can't", "won't", "wouldn't", "shouldn't", "couldn't",
+];
+const QUESTION_SUBJECTS: &[&str] = &[
+    "i", "you", "we", "they", "he", "she", "it", "there", "this", "that", "these", "those",
+    "anyone", "someone", "everyone",
+];
+const WH_WORDS: &[&str] = &["what", "why", "how", "when", "where", "who", "which", "whose"];
+
+/// Whether a sentence reads as a direct question: "Can you check…", "What time is…".
+/// "What we need is…" and "How it works:" open with a wh-word but are statements.
+fn is_question(sentence: &str) -> bool {
+    let words: Vec<String> = sentence
+        .split_whitespace()
+        .take(5)
+        .map(|w| {
+            w.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'')
+                .to_lowercase()
+        })
+        .collect();
+    let Some(first) = words.first() else {
+        return false;
+    };
+    if QUESTION_AUX.contains(&first.as_str()) {
+        return words
+            .get(1)
+            .is_some_and(|w| QUESTION_SUBJECTS.contains(&w.as_str()));
+    }
+    if WH_WORDS.contains(&first.as_str()) {
+        let next = words.get(1).map(String::as_str).unwrap_or("");
+        let subject_first = QUESTION_SUBJECTS.contains(&next) && next != "there";
+        return !subject_first
+            && words[1..]
+                .iter()
+                .take(3)
+                .any(|w| QUESTION_AUX.contains(&w.as_str()) || w.ends_with("'s"));
+    }
+    false
+}
+
+/// Ends direct questions with "?" where the speech model or a small LLM wrote "." or nothing.
+/// Line by line, so lists and paragraphs keep their shape.
+pub fn mark_questions(text: &str) -> String {
+    text.lines()
+        .map(|line| {
+            let mut out = String::with_capacity(line.len());
+            let mut start = 0;
+            let chars: Vec<(usize, char)> = line.char_indices().collect();
+            for (i, &(at, c)) in chars.iter().enumerate() {
+                let ends = matches!(c, '.' | '!' | '?')
+                    && chars.get(i + 1).is_none_or(|&(_, n)| n.is_whitespace());
+                let last = i + 1 == chars.len();
+                if !ends && !last {
+                    continue;
+                }
+                let end = at + c.len_utf8();
+                let sentence = &line[start..end];
+                if c == '.' && is_question(sentence) {
+                    out.push_str(&sentence[..sentence.len() - 1]);
+                    out.push('?');
+                } else if !ends && c.is_alphanumeric() && is_question(sentence) {
+                    // Small models often drop the final punctuation altogether.
+                    out.push_str(sentence);
+                    out.push('?');
+                } else {
+                    out.push_str(sentence);
+                }
+                start = end;
+            }
+            out.push_str(&line[start..]);
+            out
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Phrases that take back what came just before them. Kept to ones that are hard to mean
 /// any other way: a bare "no" or "actually" is left to the LLM.
 const RETRACT_CUES: &[&[&str]] = &[
@@ -254,5 +333,41 @@ mod tests {
     #[test]
     fn keeps_deliberate_repeats_across_punctuation() {
         assert_eq!(clean("Bye, bye now"), "Bye, bye now");
+    }
+
+    #[test]
+    fn marks_direct_questions() {
+        assert_eq!(
+            mark_questions("Can you tell me if the contract is ready for review."),
+            "Can you tell me if the contract is ready for review?"
+        );
+        assert_eq!(
+            mark_questions("Thanks. What time is the standup tomorrow. See you."),
+            "Thanks. What time is the standup tomorrow? See you."
+        );
+        assert_eq!(
+            mark_questions("What is the capital of France"),
+            "What is the capital of France?"
+        );
+        assert_eq!(
+            mark_questions("How many days are there in a leap year."),
+            "How many days are there in a leap year?"
+        );
+        assert_eq!(
+            mark_questions("Do you think we should hire a designer before the launch or after."),
+            "Do you think we should hire a designer before the launch or after?"
+        );
+        // Statements that only look like questions stay as they are.
+        for s in [
+            "What we need is a faster build.",
+            "How it works is simple.",
+            "Can opener is broken.",
+            "Analyze the session handler to determine why tokens expire after 5 minutes.",
+            "Why tokens expire early.",
+            "1. Is it secure\n2. Make it run fast.",
+            "The price is 3.5 dollars.",
+        ] {
+            assert_eq!(mark_questions(s), s);
+        }
     }
 }

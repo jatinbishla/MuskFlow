@@ -262,7 +262,7 @@ impl Cleaner {
     pub fn clean_as(&self, raw: &str, style: Style) -> Result<Cleaned> {
         let t = Instant::now();
         let raw = &rules::retract(&self.dictionary.apply(raw));
-        let ruled = numbers::to_digits(&rules::clean(raw));
+        let ruled = rules::mark_questions(&numbers::to_digits(&rules::clean(raw)));
         if ruled.is_empty() || !needs_llm(raw) {
             return Ok(Cleaned {
                 text: ruled,
@@ -287,9 +287,9 @@ impl Cleaner {
             raw.split_whitespace().count() * 2 + if style.rewrites() { 64 } else { 32 };
         let generation = self.llm.complete(&prefix, &suffix, max_tokens)?;
         // The LLM sometimes "corrects" a name back to a common spelling, or leaves an "um".
-        let llm_text = numbers::to_digits(&rules::strip_fillers(
+        let llm_text = rules::mark_questions(&numbers::to_digits(&rules::strip_fillers(
             &self.dictionary.apply(generation.text.trim()),
-        ));
+        )));
         let verdict = if style.rewrites() {
             let kind = if style == Style::Prompt {
                 guard::Rewrite::Restate
@@ -320,7 +320,9 @@ impl Cleaner {
 /// The cleanup that needs no model: dictionary, explicit self-corrections, fillers, digits.
 /// What the app types when no LLM is loaded, and what the guard falls back to.
 pub fn without_llm(raw: &str, dictionary: &Dictionary) -> String {
-    numbers::to_digits(&rules::clean(&rules::retract(&dictionary.apply(raw))))
+    rules::mark_questions(&numbers::to_digits(&rules::clean(&rules::retract(
+        &dictionary.apply(raw),
+    ))))
 }
 
 fn needs_llm(raw: &str) -> bool {
