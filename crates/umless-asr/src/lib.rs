@@ -87,6 +87,8 @@ pub struct SessionStats {
     pub tail_secs: f32,
     /// Time spent finishing after key-up (the ASR share of key-up latency).
     pub tail_time: Duration,
+    /// Stretches of speech the streaming decodes missed, decoded again at key-up.
+    pub rescued: usize,
 }
 
 /// A loaded ASR model that can start dictation sessions.
@@ -106,6 +108,8 @@ pub enum Engine {
 
 /// Longest phrase decoded in one go when the speaker never pauses.
 const MAX_PHRASE_SECS: f32 = 8.0;
+/// Speech segments only need to mark where speech is, so they are never force-split.
+const LONGEST_TAKE_SECS: f32 = 600.0;
 
 impl Engine {
     /// Loads the model in `model_dir`. The backend follows the directory name:
@@ -214,13 +218,21 @@ impl Engine {
                 hotwords,
                 cfg,
                 vad,
+                vad_model,
                 ..
             } => {
-                let c = Committer::new(asr.as_ref(), hotwords.clone(), cfg.clone());
-                Box::new(match vad {
-                    Some(v) => c.with_vad(v),
-                    None => c,
-                })
+                let mut c = Committer::new(asr.as_ref(), hotwords.clone(), cfg.clone());
+                if let Some(v) = vad {
+                    c = c.with_vad(v);
+                }
+                if let Some(model) = vad_model {
+                    c = c.with_segmenter(umless_audio::SpeechSegmenter::load(
+                        model,
+                        umless_audio::VadConfig::default(),
+                        LONGEST_TAKE_SECS,
+                    )?);
+                }
+                Box::new(c)
             }
             Self::Streaming(s) => Box::new(s.session()),
         })

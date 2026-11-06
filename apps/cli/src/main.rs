@@ -515,14 +515,15 @@ fn stream(c: &Common, wav: &Path, fast: bool) -> Result<()> {
     let r = replay(&engine, &pcm, fast, true)?;
     println!("\n\n{}", dictionary(c)?.apply(&r.text));
     eprintln!(
-        "· audio {:.2}s · {} decodes ({} total, {:.0}% of audio time) · tail {:.2}s in {} · key-up → text {}",
+        "· audio {:.2}s · {} decodes ({} total, {:.0}% of audio time) · tail {:.2}s in {} · key-up → text {} · rescued {}",
         samples_to_secs(pcm.len()),
         r.stats.decodes,
         ms(r.stats.decode_time),
         100.0 * r.cpu_share(),
         r.stats.tail_secs,
         ms(r.stats.tail_time),
-        ms(r.latency)
+        ms(r.latency),
+        r.stats.rescued
     );
     Ok(())
 }
@@ -640,6 +641,11 @@ pub(crate) struct Recording {
 }
 
 impl Recording {
+    /// Seconds of exact digital silence at the start: a mic that hadn't woken up yet.
+    pub fn dead_start(&self) -> f32 {
+        samples_to_secs(self.audio.iter().take_while(|&&x| x == 0.0).count())
+    }
+
     /// Why there's nothing to insert, if anything: a silent mic or no speech.
     pub fn problem(&self, vad: &SpeechTrimmer) -> Option<String> {
         let peak_db = 20.0 * self.peak.max(1e-9).log10();

@@ -133,17 +133,14 @@ impl SpeechTrimmer {
         })
     }
 
-    /// Returns the `[start, end)` sample range that contains speech (with padding),
-    /// or `None` if the clip has no speech at all.
-    pub fn speech_bounds(&self, pcm: &[f32]) -> Option<(usize, usize)> {
+    /// Every stretch of speech in the clip, as `[start, end)` sample ranges in order.
+    pub fn speech_segments(&self, pcm: &[f32]) -> Vec<(usize, usize)> {
         self.vad.reset();
-        let mut first: Option<usize> = None;
-        let mut last = 0usize;
+        let mut out = Vec::new();
         let mut collect = |vad: &VoiceActivityDetector| {
             while let Some(seg) = vad.front() {
                 let start = seg.start().max(0) as usize;
-                first.get_or_insert(start);
-                last = last.max(start + seg.n().max(0) as usize);
+                out.push((start, start + seg.n().max(0) as usize));
                 vad.pop();
             }
         };
@@ -153,8 +150,15 @@ impl SpeechTrimmer {
         }
         self.vad.flush();
         collect(&self.vad);
+        out
+    }
 
-        let start = first?;
+    /// Returns the `[start, end)` sample range that contains speech (with padding),
+    /// or `None` if the clip has no speech at all.
+    pub fn speech_bounds(&self, pcm: &[f32]) -> Option<(usize, usize)> {
+        let segments = self.speech_segments(pcm);
+        let start = segments.first()?.0;
+        let last = segments.iter().map(|s| s.1).max().unwrap_or(start);
         Some((
             start.saturating_sub(self.pad),
             (last + self.pad).min(pcm.len()),

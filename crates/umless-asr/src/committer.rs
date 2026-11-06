@@ -9,7 +9,7 @@
 use std::time::Instant;
 
 use anyhow::Result;
-use umless_audio::SpeechTrimmer;
+use umless_audio::{SpeechSegmenter, SpeechTrimmer};
 
 use crate::{Hypothesis, Session, SessionStats, Transcriber, Word, join_words};
 
@@ -20,6 +20,11 @@ const SILENCE_KEEP_SECS: f32 = 0.5;
 const WORD_LEAD_SECS: f32 = 0.05;
 /// Empty decodes tolerated while VAD still hears speech.
 const MAX_EMPTY_OVER_SPEECH: u32 = 4;
+/// Speech this long with no word in it means the streaming decodes lost it.
+const MISSED_SPEECH_SECS: f32 = 1.0;
+/// Audio decoded before a missed stretch, so the model doesn't start mid-word.
+const RESCUE_LEAD_SECS: f32 = 1.0;
+const VAD_LATE_SECS: f32 = 0.5;
 
 #[derive(Debug, Clone)]
 pub struct CommitterConfig {
@@ -52,6 +57,10 @@ pub struct Committer<'a> {
     asr: &'a dyn Transcriber,
     /// Decides whether an empty decode is silence or a model dropout.
     vad: Option<&'a SpeechTrimmer>,
+    /// Marks speech as it arrives, so key-up can find stretches the decodes lost.
+    segmenter: Option<SpeechSegmenter>,
+    /// Speech found so far, as `[start, end)` sample ranges.
+    speech: Vec<(usize, usize)>,
     hotwords: Vec<String>,
     cfg: CommitterConfig,
     audio: Vec<f32>,
@@ -73,6 +82,8 @@ impl<'a> Committer<'a> {
         Self {
             asr,
             vad: None,
+            segmenter: None,
+            speech: Vec::new(),
             hotwords,
             cfg,
             audio: Vec::with_capacity(16_000 * 60),
@@ -90,6 +101,22 @@ impl<'a> Committer<'a> {
     pub fn with_vad(mut self, vad: &'a SpeechTrimmer) -> Self {
         self.vad = Some(vad);
         self
+    }
+
+    /// Watches the whole take for speech, so stretches the decodes lost can be decoded
+    /// again at key-up.
+    pub fn with_segmenter(mut self, segmenter: SpeechSegmenter) -> Self {
+        self.segmenter = Some(segmenter);
+        self
+    }
+
+    fn add_audio(&mut self, pcm: &[f32]) {
+        self.audio.extend_from_slice(pcm);
+        if let Some(seg) = self.segmenter.as_mut() {
+            let found = seg.push(pcm);
+            self.speech
+                .extend(found.iter().map(|s| (s.start, s.start + s.samples.len())));
+        }
     }
 
     /// Whether the uncommitted audio is silence, after `empty_streak` empty decodes.
@@ -231,11 +258,11 @@ impl<'a> Committer<'a> {
 impl Session for Committer<'_> {
     /// Adds audio. Returns the words newly committed by this call (often none).
     fn append(&mut self, pcm: &[f32]) {
-        self.audio.extend_from_slice(pcm);
+        self.add_audio(pcm);
     }
 
     fn push(&mut self, pcm: &[f32]) -> Result<Vec<Word>> {
-        self.audio.extend_from_slice(pcm);
+        self.add_audio(pcm);
         let since_last = self.audio.len() - self.last_decode_at;
         let window = self.audio.len() - self.window_start;
         if (since_last as f32) < self.cfg.step_secs * SAMPLE_RATE
@@ -261,9 +288,15 @@ impl Session for Committer<'_> {
         self.stats.tail_secs = tail.len() as f32 / SAMPLE_RATE;
         let t = Instant::now();
         let hyp = self.decode_window()?;
-        self.stats.tail_time = t.elapsed();
         let pending = std::mem::take(&mut self.pending);
         self.committed.extend(restore_dropped_lead(&pending, hyp));
+        if let Some(mut seg) = self.segmenter.take() {
+            let found = seg.flush();
+            let mut speech = std::mem::take(&mut self.speech);
+            speech.extend(found.iter().map(|s| (s.start, s.start + s.samples.len())));
+            self.rescue_missed_speech(&speech)?;
+        }
+        self.stats.tail_time = t.elapsed();
         let stats = self.stats.clone();
         Ok((
             Hypothesis {
@@ -272,6 +305,95 @@ impl Session for Committer<'_> {
             stats,
         ))
     }
+}
+
+impl Committer<'_> {
+    /// A decode that starts badly (mid-word, a Bluetooth mic waking up) can lose
+    /// seconds of speech for good once the window slides past it. At key-up, decode
+    /// every stretch VAD calls speech but no word covers, and put its words back.
+    fn rescue_missed_speech(&mut self, speech: &[(usize, usize)]) -> Result<()> {
+        let speech: Vec<(f32, f32)> = speech
+            .iter()
+            .map(|&(s, e)| (s as f32 / SAMPLE_RATE, e as f32 / SAMPLE_RATE))
+            .collect();
+        for (lo, hi) in missed(&self.committed, &speech, MISSED_SPEECH_SECS) {
+            let from = ((lo - RESCUE_LEAD_SECS).max(0.0) * SAMPLE_RATE) as usize;
+            let to = ((hi * SAMPLE_RATE) as usize).min(self.audio.len());
+            let offset = from as f32 / SAMPLE_RATE;
+            let hyp = self.asr.transcribe(&self.audio[from..to], &self.hotwords)?;
+            self.stats.decodes += 1;
+            let found: Vec<Word> = hyp
+                .words
+                .into_iter()
+                .map(|w| Word {
+                    start: w.start + offset,
+                    end: w.end + offset,
+                    ..w
+                })
+                .filter(|w| (lo..hi).contains(&((w.start + w.end) / 2.0)))
+                .collect();
+            let at = self.committed.partition_point(|w| w.start < lo);
+            let found = new_words(
+                found,
+                at.checked_sub(1).map(|i| &self.committed[i]),
+                self.committed.get(at),
+            );
+            if found.is_empty() {
+                continue;
+            }
+            log::info!(
+                "rescued {:.1}–{:.1}s: {}",
+                lo,
+                hi,
+                join_words(&found)
+            );
+            self.stats.rescued += 1;
+            self.committed.splice(at..at, found);
+        }
+        Ok(())
+    }
+}
+
+/// What a re-decode of a missed stretch adds: not the committed words on either side
+/// heard again with other timings, and nothing if all it heard was hesitation.
+fn new_words(mut found: Vec<Word>, before: Option<&Word>, after: Option<&Word>) -> Vec<Word> {
+    let same = |a: &Word, b: Option<&Word>| b.is_some_and(|b| norm(&a.text) == norm(&b.text));
+    if found.first().is_some_and(|w| same(w, before)) {
+        found.remove(0);
+    }
+    if found.last().is_some_and(|w| same(w, after)) {
+        found.pop();
+    }
+    let heard_words = found
+        .iter()
+        .any(|w| !UNSTABLE.contains(&norm(&w.text).as_str()));
+    if heard_words { found } else { Vec::new() }
+}
+
+/// Stretches inside `speech` (seconds) at least `min_secs` long with no word in them,
+/// bounded by the words on either side so a re-decode can't duplicate them. A stretch
+/// may start up to [`VAD_LATE_SECS`] before VAD heard speech, in case it heard it late.
+fn missed(words: &[Word], speech: &[(f32, f32)], min_secs: f32) -> Vec<(f32, f32)> {
+    let mut out = Vec::new();
+    for &(start, end) in speech {
+        let inside: Vec<&Word> = words
+            .iter()
+            .filter(|w| w.end > start && w.start < end)
+            .collect();
+        let mut lo = words
+            .iter()
+            .filter(|w| w.end <= start)
+            .map(|w| w.end)
+            .fold((start - VAD_LATE_SECS).max(0.0), f32::max);
+        for w in inside.iter().map(|w| (w.start, w.end)).chain([(end, end)]) {
+            let hi = w.0.min(end).max(lo);
+            if hi - lo.max(start) >= min_secs {
+                out.push((lo, hi));
+            }
+            lo = lo.max(w.1);
+        }
+    }
+    out
 }
 
 fn norm(s: &str) -> String {
@@ -564,5 +686,50 @@ mod tests {
         );
         let committed = c.push(&second).unwrap();
         assert_eq!(join_words(&committed), "anyone gets");
+    }
+
+    #[test]
+    fn finds_speech_no_word_covers() {
+        let ws = |v: &[(&str, f32, f32)]| -> Vec<Word> {
+            v.iter()
+                .map(|&(t, s, e)| Word {
+                    text: t.into(),
+                    start: s,
+                    end: e,
+                })
+                .collect()
+        };
+        // 10 s of speech, but the decodes only kept the last two seconds.
+        let lost = ws(&[("what", 8.2, 8.5), ("is", 8.6, 8.8), ("left", 9.0, 9.4)]);
+        assert_eq!(missed(&lost, &[(0.3, 10.0)], 1.5), [(0.0, 8.2)]);
+        // Normal speech: words all the way through, nothing to rescue.
+        let fine = ws(&[("a", 0.4, 1.0), ("b", 1.3, 2.4), ("c", 2.6, 3.9)]);
+        assert!(missed(&fine, &[(0.3, 4.0)], 1.5).is_empty());
+        // A whole phrase lost after a pause: bounded by the word before it.
+        let gap = ws(&[("hi", 0.2, 0.6), ("end", 9.0, 9.5)]);
+        assert_eq!(
+            missed(&gap, &[(0.1, 0.7), (2.0, 6.0), (8.9, 9.6)], 1.5),
+            [(1.5, 6.0)]
+        );
+    }
+
+    #[test]
+    fn a_rescue_adds_only_new_words() {
+        let w = |t: &str| Word {
+            text: t.into(),
+            start: 0.0,
+            end: 0.0,
+        };
+        let texts = |ws: Vec<Word>| join_words(&ws);
+        // The word before heard again, then a hesitation: nothing new.
+        assert_eq!(texts(new_words(vec![w("my,"), w("um,")], Some(&w("my")), None)), "");
+        assert_eq!(
+            texts(new_words(
+                vec![w("my"), w("auth"), w("middleware"), w("no")],
+                Some(&w("my")),
+                Some(&w("no,"))
+            )),
+            "auth middleware"
+        );
     }
 }

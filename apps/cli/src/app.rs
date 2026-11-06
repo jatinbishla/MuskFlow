@@ -262,6 +262,10 @@ fn dictate_loop(c: &Common, device: Option<&str>, settings: &Settings, ui: &Ui) 
             }
         };
         ui.set(State::Working);
+        // Only the latest take, in the temp folder, so a bad transcript can be replayed with `umless stream`.
+        if let Err(e) = umless_audio::save_wav_16k(&last_take(), &rec.audio) {
+            log::warn!("could not keep the recording: {e:#}");
+        }
         let spoke = samples_to_secs(rec.audio.len());
         if spoke < MIN_SPEECH_SECS {
             eprintln!("→ too short");
@@ -376,10 +380,18 @@ fn dictate_loop(c: &Common, device: Option<&str>, settings: &Settings, ui: &Ui) 
                     });
                 }
                 eprintln!(
-                    "→ typed in {} (speech {} + cleanup {}) · spoke {spoke:.1}s\n  {text}",
+                    "→ typed in {} (speech {} + cleanup {}) · spoke {spoke:.1}s{}\n  {text}",
                     ms(rec.stopped.elapsed()),
                     ms(rec.finish),
-                    ms(clean_time)
+                    ms(clean_time),
+                    match rec.stats.rescued {
+                        0 => String::new(),
+                        n => format!(" · {n} missed stretch(es) decoded again"),
+                    } + &match rec.dead_start() {
+                        // Bluetooth mics can take a moment to wake; anything said before that is gone.
+                        s if s >= 0.5 => format!(" · mic sent nothing for the first {s:.1}s"),
+                        _ => String::new(),
+                    }
                 );
             }
             Err(e) => {
@@ -513,6 +525,11 @@ fn quote_list(words: &[String]) -> String {
         .map(|w| format!("\u{201c}{w}\u{201d}"))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Where the latest dictation's audio is kept (overwritten each time).
+pub fn last_take() -> PathBuf {
+    std::env::temp_dir().join("umless-last-take.wav")
 }
 
 fn modified(path: &Path) -> Option<SystemTime> {
