@@ -8,12 +8,14 @@ Fast · Accurate · Creative · Light. Runs entirely on your laptop.
 
 ## Install (one command)
 
+Needs macOS 13 or later, 1–6 GB free (by tier) and an admin account. On a brand-new Mac, run `xcode-select --install` first: `git clone` needs Apple's command line tools.
+
 ```bash
 git clone https://github.com/jatinbishla/Umless.git && cd Umless
 ./install.sh
 ```
 
-That's all. The installer builds Umless (installing Rust first if you don't have it), suggests a tier for your machine, and downloads exactly the models that tier needs. Nothing else to clone or download. To skip the questions, pass the tier: `./install.sh lite`, `./install.sh standard`, `./install.sh max`, or `./install.sh all`.
+That's all. The installer builds Umless (installing Rust and cmake first if you don't have them), suggests a tier for your machine, downloads exactly the models that tier needs, adds a local signing certificate to your login keychain (so updates keep their permissions), installs **/Applications/Umless.app** and opens it. Nothing else to clone or download. The app reads its models from this folder's `models/`, so keep the folder where it is (or set `UMLESS_MODELS` before installing). To skip the questions, pass the tier: `./install.sh lite`, `./install.sh standard`, `./install.sh max`, or `./install.sh all`.
 
 | Tier | Download | Best for |
 |---|---|---|
@@ -31,6 +33,8 @@ Add or check tiers any time:
 ## Use
 
 **Dictate into any app (macOS):** hold **Fn**, speak, let go, and the cleaned text is typed at your cursor.
+
+`install.sh` already set up the app. After pulling updates or building by hand, rebuild it with:
 
 ```bash
 scripts/make-signing-cert.sh      # once: a local signing certificate, so updates keep their permissions
@@ -52,7 +56,7 @@ Also set System Settings → Keyboard → "Press 🌐 key to" → **Do Nothing**
 
 To remove Umless completely (app, permission entries, history, dictionary, settings, log and signing certificate), run `scripts/uninstall.sh`. Add `--keep-data` to keep your history and dictionary.
 
-From a terminal, `umless app` does the same. Grant the permissions to the terminal app instead.
+From a terminal, `./target/release/umless app` does the same. Grant the permissions to the terminal app instead.
 
 **Try it in the terminal** (speak, then press Enter):
 
@@ -60,7 +64,7 @@ From a terminal, `umless app` does the same. Grant the permissions to the termin
 ./target/release/umless listen --tier standard
 ```
 
-`--tier` works on every command. Other commands:
+`--tier` works on every command. Other commands (`umless` is `./target/release/umless`; to type just `umless`, run `ln -s "$PWD/target/release/umless" /usr/local/bin/umless`):
 
 | Command | What it does |
 |---|---|
@@ -68,8 +72,11 @@ From a terminal, `umless app` does the same. Grant the permissions to the termin
 | `umless stream file.wav` | replays a file as live speech and measures key-up → text latency |
 | `umless devices` / `listen --mic "<name>"` | list mics / pick one |
 | `umless listen --save recordings/x.wav` | keep the recording for replay benchmarks |
-| `umless clean "text"` | runs the cleanup LLM on any text |
-| `umless bench --show` | runs every clip through every installed tier and compares accuracy, latency, CPU and size |
+| `umless clean "text"` | runs the cleanup LLM on any text (`--style clean, formal, casual or prompt`) |
+| `umless command "reply saying yes" --screen thread.txt` | command mode without the keyboard |
+| `umless app` | the Fn-key app, run from a terminal |
+| `umless models install <tier>` / `models list` | download or list models |
+| `umless bench --show` | runs every clip through every installed tier and compares accuracy, latency, CPU and size (make the clips first with `scripts/make-bench-clips.sh`) |
 
 ### Your dictionary
 
@@ -98,7 +105,7 @@ Tuning flags: `--threads N`, `--step` / `--context` (streaming), `--asr <model d
 | `crates/umless-llm` | llama.cpp runtime: prefix-state cache, prompt-lookup speculative decoding |
 | `crates/umless-cleanup` | rules, LLM prompt, faithfulness guard |
 | `crates/umless-eval` | WER and text normalisation for benchmarks |
-| `apps/cli` | the `umless` binary (`transcribe`, `stream`, `listen`, `devices`, `bench`) |
+| `apps/cli` | the `umless` binary (`app`, `listen`, `command`, `clean`, `transcribe`, `stream`, `devices`, `models`, `bench`) |
 | `install.sh` | build + model download, by tier |
 | `scripts/` | benchmark clip synthesis and passage recording |
 

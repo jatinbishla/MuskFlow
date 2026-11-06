@@ -28,6 +28,8 @@ CLIPS=(
 
 for row in "${CLIPS[@]}"; do
   IFS='|' read -r id voice rate text clean <<<"$row"
+  # Not every Mac has every voice installed; fall back to one that ships with macOS.
+  say -v '?' | grep -q "^$voice " || voice=Samantha
   say -v "$voice" -r "$rate" -o "$OUT/$id.aiff" "$text"
   afconvert -f WAVE -d LEI16@16000 "$OUT/$id.aiff" "$OUT/$id.wav"
   rm "$OUT/$id.aiff"

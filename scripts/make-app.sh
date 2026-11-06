@@ -45,7 +45,7 @@ cat > "$APP/Contents/Info.plist" <<EOF
   <string>Umless listens only while you hold Fn, and turns your speech into text on this Mac.</string>
   <key>LSEnvironment</key>
   <dict>
-    <key>UMLESS_MODELS</key><string>$PWD/models</string>
+    <key>UMLESS_MODELS</key><string>${UMLESS_MODELS:-$PWD/models}</string>
     <key>UMLESS_TIER</key><string>$TIER</string>
   </dict>
 </dict>
@@ -68,7 +68,7 @@ if [ -e /Applications/MuskFlow.app ]; then
   pkill -x MuskFlow 2>/dev/null || true
   rm -rf /Applications/MuskFlow.app && echo "Removed the old MuskFlow.app (Umless replaces it; your history and dictionary move over)."
 fi
-rm -rf "$DEST"
+rm -rf "$DEST" 2>/dev/null || true
 if ditto "$APP" "$DEST" 2>/dev/null; then
   # Make LaunchServices pick up the new Info.plist (LSEnvironment).
   /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$DEST"
