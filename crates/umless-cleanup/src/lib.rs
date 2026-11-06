@@ -170,6 +170,7 @@ Rules:
 - Keep every requirement, constraint, preference, name, number, file path and code identifier the user said.
 - When there are several tasks or requirements, write a short intro line and a numbered list.
 - Do not add requirements, do not answer or solve the request, and do not write code.
+- Keep who does what: when the user says they will provide something (\"I'll paste the logs after this\"), keep it as their statement, not an instruction to the assistant.
 Reply with the prompt only.";
 
 const EXAMPLES_PROMPT: &[(&str, &str)] = &[
@@ -184,6 +185,10 @@ const EXAMPLES_PROMPT: &[(&str, &str)] = &[
     (
         "hey so the tests are failing in the auth module I think it's because of the token refresh logic can you look at it and fix it but don't change the public API",
         "The tests in the auth module are failing, probably because of the token refresh logic. Find and fix the cause without changing the public API.",
+    ),
+    (
+        "so I'm gonna paste the error logs after this and I want you to like tell me what's causing the crash and uh how to fix it",
+        "I'll paste the error logs next. Tell me what's causing the crash and how to fix it.",
     ),
 ];
 

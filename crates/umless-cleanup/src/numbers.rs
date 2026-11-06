@@ -273,6 +273,22 @@ fn line(text: &str) -> String {
     let mut last_converted: Option<usize> = None;
     let mut i = 0;
     while i < toks.len() {
+        // "plus nine one" → +91: a dialling code, said digit by digit.
+        if toks[i].lower == "plus" && toks[i].post.is_empty() {
+            let digits: String = toks[i + 1..]
+                .iter()
+                .take(3)
+                .map_while(|t| ONES[..10].iter().position(|o| *o == t.lower))
+                .map(|d| char::from(b'0' + d as u8))
+                .collect();
+            if !digits.is_empty() {
+                let end = i + digits.len();
+                out.push(format!("{}+{}{}", toks[i].pre, digits, toks[end].post));
+                last_converted = Some(end);
+                i = end + 1;
+                continue;
+            }
+        }
         match convert(&toks, i, last_converted) {
             Some((digits, used)) => {
                 let end = i + used - 1;
@@ -393,6 +409,16 @@ fn convert(toks: &[Tok], i: usize, last_converted: Option<usize>) -> Option<(Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dialling_codes_become_digits() {
+        assert_eq!(
+            to_digits("numbers that start with plus nine one and then ten digits"),
+            "numbers that start with +91 and then 10 digits"
+        );
+        assert_eq!(to_digits("call plus four four, then"), "call +44, then");
+        assert_eq!(to_digits("plus the fee"), "plus the fee");
+    }
 
     #[test]
     fn quantities_become_digits() {
