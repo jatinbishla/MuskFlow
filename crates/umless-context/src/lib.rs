@@ -316,11 +316,15 @@ mod imp {
         if let Some(window) = window {
             let mut walk = Walk {
                 out: String::new(),
+                web: String::new(),
+                in_web: false,
                 nodes: 0,
                 deadline: Instant::now() + WALK_BUDGET,
             };
             walk.visit(&window, 0);
-            screen.window = tail(&walk.out, WINDOW_CHARS);
+            // In a browser the page is what matters; the tab strip and bookmarks are noise.
+            let text = if walk.web.is_empty() { &walk.out } else { &walk.web };
+            screen.window = tail(text, WINDOW_CHARS);
         }
         screen
     }
@@ -347,6 +351,9 @@ mod imp {
     /// Depth-first walk collecting visible text in reading order.
     struct Walk {
         out: String,
+        /// Text inside web pages (AXWebArea), kept apart from the browser around them.
+        web: String,
+        in_web: bool,
         nodes: usize,
         deadline: Instant,
     }
@@ -368,9 +375,13 @@ mod imp {
                         return;
                     }
                 }
-                // Chrome: menus, toolbars and the tab strip are noise.
-                "AXMenuBar" | "AXMenu" | "AXToolbar" | "AXTabGroup" | "AXScrollBar" => return,
+                // Menus, toolbars and scroll bars are noise. Not tab groups: Safari keeps the page in one.
+                "AXMenuBar" | "AXMenu" | "AXToolbar" | "AXScrollBar" => return,
                 _ => {}
+            }
+            let entered_web = role == "AXWebArea" && !self.in_web;
+            if entered_web {
+                self.in_web = true;
             }
             // SAFETY: AXChildren is an array of AX elements; each is type-checked.
             let children = unsafe { copy(el, "AXChildren") };
@@ -385,17 +396,30 @@ mod imp {
                     self.visit(&child, depth + 1);
                 }
             }
+            if entered_web {
+                self.in_web = false;
+            }
         }
 
         fn push(&mut self, text: &str) {
             let text = text.trim();
-            if text.is_empty() || self.out.ends_with(text) {
+            if text.is_empty() {
                 return;
             }
-            if !self.out.is_empty() {
-                self.out.push('\n');
+            let outs = if self.in_web {
+                vec![&mut self.out, &mut self.web]
+            } else {
+                vec![&mut self.out]
+            };
+            for out in outs {
+                if out.ends_with(text) {
+                    continue;
+                }
+                if !out.is_empty() {
+                    out.push('\n');
+                }
+                out.push_str(text);
             }
-            self.out.push_str(text);
         }
     }
 

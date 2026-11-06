@@ -23,9 +23,16 @@ pub fn names(text: &str) -> Vec<String> {
             }
             run.clear();
         };
+        let core = |w: &str| w.trim_matches(|c: char| !c.is_alphanumeric()).to_string();
+        // Chats put the sender first: a line opening with a full name ("Meera Shah haha…").
+        // Its first word is a name too. A lone capitalised word is more often a button.
+        let sender = words.len() >= 2
+            && is_name(&core(words[0]))
+            && !words[0].ends_with(['.', '?', '!', ':', ','])
+            && is_name(&core(words[1]));
         for (i, raw) in words.iter().enumerate() {
             let w = raw.trim_matches(|c: char| !c.is_alphanumeric());
-            let starts_sentence = i == 0 || words[i - 1].ends_with(['.', '?', '!', ':']);
+            let starts_sentence = (i == 0 && !sender) || i > 0 && words[i - 1].ends_with(['.', '?', '!', ':']);
             if is_name(w) && (!starts_sentence || has_inner_capital(w)) {
                 run.push(w);
                 // "Construction," ends the run after it.
@@ -172,6 +179,18 @@ mod tests {
         for n in ["Thanks", "Can", "Hi", "Best"] {
             assert!(!names.contains(&n.to_string()), "{n} isn't a name");
         }
+    }
+
+    #[test]
+    fn chat_senders_are_names() {
+        let chat = "Meera Shah haha you survived the client call lol\nReply";
+        let names = names(chat);
+        assert!(!names.contains(&"Reply".to_string()));
+        for n in ["Meera Shah", "Meera", "Shah"] {
+            assert!(names.contains(&n.to_string()), "missing {n}: {names:?}");
+        }
+        // A sentence that merely opens with two capitals is not a sender line.
+        assert!(!super::names("Thanks Priya for the deck").contains(&"Thanks".to_string()));
     }
 
     #[test]
