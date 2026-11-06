@@ -32,7 +32,8 @@ pub fn names(text: &str) -> Vec<String> {
             && is_name(&core(words[1]));
         for (i, raw) in words.iter().enumerate() {
             let w = raw.trim_matches(|c: char| !c.is_alphanumeric());
-            let starts_sentence = (i == 0 && !sender) || i > 0 && words[i - 1].ends_with(['.', '?', '!', ':']);
+            let starts_sentence =
+                (i == 0 && !sender) || i > 0 && words[i - 1].ends_with(['.', '?', '!', ':']);
             if is_name(w) && (!starts_sentence || has_inner_capital(w)) {
                 run.push(w);
                 // "Construction," ends the run after it.

@@ -9,8 +9,93 @@ pub fn is_filler(word: &str) -> bool {
     FILLERS.contains(&word)
 }
 
-/// Removes fillers and stammered repeats, tidies spacing, capitalises the start.
+/// Words "you know" leads into when it's a real question or clause ("you know what I mean").
+const KNOW_OBJECTS: &[&str] = &[
+    "that", "what", "how", "why", "who", "where", "when", "whether", "if", "about", "him", "her",
+    "them", "it", "me", "this",
+];
+/// Words before "you know" that make it literal ("do you know", "if you know").
+const KNOW_ASKERS: &[&str] = &[
+    "do", "did", "don't", "didn't", "if", "as", "would", "will", "you'd", "could", "may", "might",
+    "let", "and",
+];
+/// "like" before these is a hedge, not a verb: "like super slow".
+const LIKE_HEDGED: &[&str] = &[
+    "super",
+    "really",
+    "so",
+    "way",
+    "totally",
+    "literally",
+    "basically",
+    "a",
+    "an",
+    "about",
+    "around",
+    "maybe",
+];
+
+fn core(tok: &str) -> String {
+    tok.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'')
+        .to_lowercase()
+}
+
+/// Drops spoken hedges that are never content: "you know" and "like" used as fillers.
+fn drop_hedges(raw: &str) -> String {
+    let toks: Vec<&str> = raw.split_whitespace().collect();
+    let mut keep = vec![true; toks.len()];
+    for i in 0..toks.len() {
+        let next = toks.get(i + 1).map(|t| core(t)).unwrap_or_default();
+        let prev = i.checked_sub(1).map(|j| core(toks[j])).unwrap_or_default();
+        match core(toks[i]).as_str() {
+            "you" if next == "know" && !toks[i + 1].ends_with('?') => {
+                let after = toks.get(i + 2).map(|t| core(t)).unwrap_or_default();
+                if !KNOW_ASKERS.contains(&prev.as_str()) && !KNOW_OBJECTS.contains(&after.as_str())
+                {
+                    keep[i] = false;
+                    keep[i + 1] = false;
+                }
+            }
+            "like" => {
+                // "it's like super slow"; not "I like it", "looks like a bug", and not
+                // "like 90%", which means "about".
+                let hedge_after = LIKE_HEDGED.contains(&next.as_str());
+                let verb_before = matches!(
+                    prev.as_str(),
+                    "i" | "you"
+                        | "we"
+                        | "they"
+                        | "would"
+                        | "looks"
+                        | "look"
+                        | "looked"
+                        | "seems"
+                        | "feel"
+                        | "feels"
+                        | "sounds"
+                        | "just"
+                        | "don't"
+                        | "didn't"
+                        | "really"
+                );
+                if hedge_after && !verb_before && !matches!(next.as_str(), "a" | "an") {
+                    keep[i] = false;
+                }
+            }
+            _ => {}
+        }
+    }
+    toks.iter()
+        .zip(&keep)
+        .filter(|(_, k)| **k)
+        .map(|(t, _)| *t)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Removes fillers, hedges and stammered repeats, tidies spacing, capitalises the start.
 pub fn clean(raw: &str) -> String {
+    let raw = &drop_hedges(raw);
     let mut out: Vec<String> = Vec::new();
     for tok in raw.split_whitespace() {
         let core = tok
@@ -395,6 +480,24 @@ mod tests {
             "The price is 3.5 dollars.",
         ] {
             assert_eq!(mark_questions(s), s);
+        }
+    }
+
+    #[test]
+    fn drops_spoken_hedges() {
+        assert_eq!(
+            clean("ignore the you know none values and it's like super slow with like 500 rows"),
+            "Ignore the none values and it's super slow with like 500 rows"
+        );
+        for kept in [
+            "do you know the answer",
+            "you know what I mean",
+            "I like it",
+            "it looks like a bug",
+            "something like a cache",
+            "I would like 2 tickets",
+        ] {
+            assert_eq!(clean(kept).to_lowercase(), kept.to_lowercase());
         }
     }
 }
