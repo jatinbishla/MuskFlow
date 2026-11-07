@@ -132,6 +132,10 @@
 <main id="main"></main>
 <div class="toast" id="toast"></div>
 <script>
+// The hold key and OS, from the backend ('setup'): Fn on macOS, Ctrl + Win (or the
+// configured key) on Windows and Linux.
+let K = { os: 'macos', hold: 'fn', cmd: 'control' };
+const mac = () => K.os === 'macos';
 window.umless = {
   _n: 0, _pending: {},
   call(cmd, args = {}) {
@@ -150,7 +154,7 @@ window.umless = {
   _event(name, status) {
     const dot = document.getElementById('dot');
     dot.className = 'dot' + (name === 'error' ? ' bad' : /Listening|Writing|Loading/.test(status) ? ' busy' : '');
-    document.getElementById('status').textContent = status === 'Ready' ? 'Ready · hold Fn to dictate' : status;
+    document.getElementById('status').textContent = status === 'Ready' ? `Ready · hold ${mac() ? 'Fn' : K.hold} to dictate` : status;
     if (name === 'typed' && (page === 'home' || page === 'history')) show(page);
     if (name === 'setup' && page !== 'setup') show('setup');
   },
@@ -213,18 +217,25 @@ const pages = {
     const s = await umless.call('setup');
     const fnOk = s.fn_key === 'nothing';
     const steps = [
-      { done: s.mic === 'granted', title: 'Microphone', why: 'So Umless can hear you while you hold fn.',
+      { done: s.mic === 'granted', title: 'Microphone', why: `So Umless can hear you while you hold ${K.hold}.`,
         action: s.mic === 'denied'
           ? ['Open Microphone settings', () => umless.call('request', { what: 'mic_settings' })]
           : ['Allow', () => umless.call('request', { what: 'mic' })],
         more: s.mic === 'denied' ? 'macOS remembers a "Don\'t Allow". Turn Umless on in the list that opens.' : null },
-      { done: s.accessibility, title: 'Accessibility', why: 'So Umless can type the text where your cursor is.',
+      mac() ? { done: s.accessibility, title: 'Accessibility', why: 'So Umless can type the text where your cursor is.',
         action: ['Allow', () => umless.call('request', { what: 'accessibility' })],
-        more: 'In the list that opens, turn on Umless.', reset: 'accessibility' },
-      { done: s.input_monitoring, title: 'Input Monitoring', why: 'So Umless can see when you hold the fn key.',
+        more: 'In the list that opens, turn on Umless.', reset: 'accessibility' }
+      : { done: s.accessibility, title: 'Typing tools', why: 'So Umless can paste the text where your cursor is.',
+        action: ['Check again', () => umless.call('request', { what: 'accessibility' })],
+        more: s.wayland ? 'Install wl-clipboard and wtype (on GNOME: ydotool, with ydotoold running), e.g. sudo apt install wl-clipboard wtype ydotool'
+                        : 'Install xclip and xdotool, e.g. sudo apt install xclip xdotool' },
+      mac() ? { done: s.input_monitoring, title: 'Input Monitoring', why: 'So Umless can see when you hold the fn key.',
         action: ['Allow', () => umless.call('request', { what: 'input_monitoring' })],
         more: 'Turn on Umless, then restart it. macOS applies this one only after a restart.',
-        restart: true, reset: 'input_monitoring' },
+        restart: true, reset: 'input_monitoring' }
+      : { done: s.input_monitoring, title: 'Keyboard access', why: `So Umless can see when you hold ${K.hold}.`,
+        action: ['Check again', () => umless.call('request', { what: 'input_monitoring' })],
+        more: 'Run: sudo usermod -aG input $USER, then log out and back in, and restart Umless.', restart: true },
       { done: fnOk, title: 'Make fn do nothing else', why: 'Set "Press 🌐 key to" to "Do Nothing", so fn doesn\'t also open the emoji picker.',
         action: ['Open Keyboard settings', () => umless.call('request', { what: 'keyboard' })] },
     ];
@@ -246,13 +257,13 @@ const pages = {
         st.done ? null : $('div', { class: 'side' }, $('button', { class: 'btn primary', onclick: st.action[1] }, st.action[0]))));
     });
     const ready = s.done;
-    const box = $('textarea', { placeholder: ready ? 'Click here, hold fn and say "Hello Umless, this is working."' : 'Finish the steps above first.' });
+    const box = $('textarea', { placeholder: ready ? `Click here, hold ${K.hold} and say "Hello Umless, this is working."` : 'Finish the steps above first.' });
     if (!ready) box.disabled = true;
     box.addEventListener('input', () => { if (box.value.trim().length > 3 && !triedIt) { triedIt = true; toast('It works 🎉'); show('setup'); } });
     list.append($('div', { class: 'step' + (triedIt ? ' done' : '') },
       $('div', { class: 'badge' }, triedIt ? '✓' : String(steps.length + 1)),
       $('div', { class: 'what' }, $('div', { class: 'title' }, 'Try it'),
-        $('div', { class: 'why' }, 'Hold fn anywhere, speak, and let go.'), triedIt ? null : box)));
+        $('div', { class: 'why' }, `Hold ${K.hold} anywhere, speak, and let go.`), triedIt ? null : box)));
     clearTimeout(setupTimer);
     // Re-check every second while the user is in System Settings.
     if (!(ready && fnOk && triedIt)) setupTimer = setTimeout(() => { if (page === 'setup' && document.activeElement !== box) show('setup'); }, 1000);
@@ -260,8 +271,8 @@ const pages = {
     return [
       $('h1', {}, needed ? 'Set up Umless' : triedIt ? 'You\'re all set' : 'Almost there'),
       $('p', { class: 'sub' }, needed
-        ? 'macOS asks you to allow a few things once. Each step turns green as soon as it\'s done.'
-        : 'Everything is allowed. Try it below, then hold fn anywhere you type.'),
+        ? (mac() ? 'macOS asks you to allow a few things once.' : 'Umless needs a few things set up once.') + ' Each step turns green as soon as it\'s done.'
+        : `Everything is allowed. Try it below, then hold ${K.hold} anywhere you type.`),
       $('div', { class: 'progress' }, $('div', { style: `width:${Math.round(100 * done / total)}%` })),
       list,
       !needed && triedIt ? $('p', { class: 'note' }, $('a', { href: '#', onclick: ev => { ev.preventDefault(); show('home'); } }, 'Go to Home →')) : null,
@@ -273,7 +284,7 @@ const pages = {
     const stat = (n, l) => $('div', { class: 'card stat' }, $('div', { class: 'n' }, n), $('div', { class: 'l' }, l));
     return [
       $('h1', {}, 'Welcome back'),
-      $('p', { class: 'sub' }, 'Hold ', $('kbd', {}, 'fn'), ' anywhere, speak, and let go. Your words appear where your cursor is.'),
+      $('p', { class: 'sub' }, 'Hold ', $('kbd', {}, K.hold), ' anywhere, speak, and let go. Your words appear where your cursor is.'),
       $('div', { class: 'grid' },
         stat(fmtNum(s.words), 'words dictated'),
         stat(fmtNum(s.words_week), 'words this week'),
@@ -282,7 +293,7 @@ const pages = {
       $('h2', {}, 'Recent'),
       recent.length
         ? $('div', { class: 'list' }, recent.map(e => entryRow(e)))
-        : $('div', { class: 'list' }, $('div', { class: 'empty' }, 'Nothing yet. Hold fn and say something.')),
+        : $('div', { class: 'list' }, $('div', { class: 'empty' }, `Nothing yet. Hold ${K.hold} and say something.`)),
       recent.length ? $('p', { class: 'note' }, $('a', { href: '#', onclick: ev => { ev.preventDefault(); show('history'); } }, 'See all history →')) : null,
     ];
   },
@@ -384,9 +395,9 @@ const pages = {
       $('p', { class: 'sub' }, 'Everything runs on this Mac. Nothing you say leaves it.'),
       $('div', { class: 'stack' },
         $('div', { class: 'card' }, $('h3', {}, 'Shortcuts'), $('div', { class: 'kv' },
-          $('div', { class: 'k' }, 'Dictate'), $('div', {}, 'Hold ', $('kbd', {}, 'fn'), ', speak, let go'),
-          $('div', { class: 'k' }, 'Command mode'), $('div', {}, 'Hold ', $('kbd', {}, 'fn'), ' + ', $('kbd', {}, 'control'), ' and say what to write: \u201creply saying I\u2019ll send it Friday\u201d, or select text and say \u201cmake this shorter\u201d'),
-          $('div', { class: 'k' }, 'Cancel'), $('div', {}, 'Press any other key while holding ', $('kbd', {}, 'fn')))),
+          $('div', { class: 'k' }, 'Dictate'), $('div', {}, 'Hold ', $('kbd', {}, K.hold), ', speak, let go'),
+          $('div', { class: 'k' }, 'Command mode'), $('div', {}, 'Hold ', $('kbd', {}, K.hold), ' + ', $('kbd', {}, K.cmd), ' and say what to write: \u201creply saying I\u2019ll send it Friday\u201d, or select text and say \u201cmake this shorter\u201d'),
+          $('div', { class: 'k' }, 'Cancel'), $('div', {}, 'Press any other key while holding ', $('kbd', {}, K.hold)))),
         $('div', { class: 'card' }, $('h3', {}, 'Writing style'), seg,
           $('div', { class: 'styles' },
             $('div', { class: 'k' }, 'Auto'), $('div', {}, 'Picks one from the app you\'re typing into.'),
@@ -399,7 +410,7 @@ const pages = {
           $('div', { class: 'k' }, 'Launch at login'), sw,
           $('div', { class: 'k' }, 'Use what\u2019s on screen'), toggle('set_screen_context', s.screen_context),
           $('div', { class: 'k' }, 'Learn from my corrections'), toggle('set_learning', s.learning)),
-          $('p', { class: 'note' }, 'Screen: Umless reads the text around your cursor (the email thread, the chat) to spell names right, match the conversation\u2019s tone, and give command mode context. It stays on this Mac and is never saved. Corrections: when you fix a name Umless typed, it adds your spelling to the dictionary.')),
+          $('p', { class: 'note' }, (mac() ? '' : 'Windows and Linux: Umless reads only the app and window title for now. ') + 'Screen: Umless reads the text around your cursor (the email thread, the chat) to spell names right, match the conversation\u2019s tone, and give command mode context. It stays on this ' + (mac() ? 'Mac' : 'computer') + ' and is never saved. Corrections: when you fix a name Umless typed, it adds your spelling to the dictionary.')),
         $('div', { class: 'card' }, $('h3', {}, 'Models'), tierSeg, $('div', { class: 'kv', style: 'margin-top:12px' },
           $('div', { class: 'k' }, 'Speech'), $('div', {}, s.speech),
           $('div', { class: 'k' }, 'Cleanup'), $('div', {}, s.cleanup)),
@@ -426,6 +437,8 @@ async function show(name) {
 document.querySelectorAll('nav button').forEach(b => b.addEventListener('click', () => show(b.dataset.page)));
 // Open on Setup until everything is allowed.
 umless.call('setup').then(s => {
+  K = { os: s.os || 'macos', hold: s.hold_key || 'fn', cmd: s.command_key || 'control' };
+  document.getElementById('status').textContent = `Ready · hold ${mac() ? 'Fn' : K.hold} to dictate`;
   const pending = !s.done || s.fn_key !== 'nothing';
   document.getElementById('nav-setup').hidden = !pending;
   show(pending ? 'setup' : 'home');

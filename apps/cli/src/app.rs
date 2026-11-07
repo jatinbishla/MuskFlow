@@ -54,6 +54,27 @@ pub fn in_app_bundle() -> bool {
         .unwrap_or(false)
 }
 
+/// Windows: `umless app --window` started from a shortcut gets a console window of its
+/// own. Close it (Umless lives in the tray) and report that output should go to the log.
+/// From a terminal the console is shared, and is kept.
+pub fn detach_console() -> bool {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::Console::{FreeConsole, GetConsoleProcessList};
+        let args: Vec<String> = std::env::args().collect();
+        let app_window = args.iter().any(|a| a == "app") && args.iter().any(|a| a == "--window");
+        let mut pids = [0u32; 4];
+        // SAFETY: a fixed buffer; returns how many processes share this console.
+        let sharing = unsafe { GetConsoleProcessList(pids.as_mut_ptr(), pids.len() as u32) };
+        if app_window && sharing == 1 {
+            // SAFETY: detaching from our own console.
+            unsafe { FreeConsole() };
+            return true;
+        }
+    }
+    false
+}
+
 /// A double-clicked app has no terminal: send stderr to the log file (`paths::log_path`).
 pub fn log_to_file() {
     let path = crate::paths::log_path();
@@ -71,7 +92,19 @@ pub fn log_to_file() {
         unsafe { libc::dup2(file.as_raw_fd(), libc::STDERR_FILENO) };
         std::mem::forget(file);
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    if let Ok(file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        use std::os::windows::io::IntoRawHandle;
+        use windows_sys::Win32::System::Console::{STD_ERROR_HANDLE, SetStdHandle};
+        // SAFETY: the handle stays open for the process lifetime; Rust's stderr looks the
+        // standard handle up on every write.
+        unsafe { SetStdHandle(STD_ERROR_HANDLE, file.into_raw_handle() as _) };
+    }
+    #[cfg(not(any(unix, windows)))]
     let _ = path;
 }
 
@@ -98,7 +131,7 @@ fn move_old_data() {
     }
 }
 
-pub fn run(c: &Common, device: Option<&str>) -> Result<()> {
+pub fn run(c: &Common, device: Option<&str>, open_window: bool) -> Result<()> {
     move_old_data();
     let mut c = c.clone();
     let settings = Settings::load();
@@ -129,7 +162,8 @@ pub fn run(c: &Common, device: Option<&str>) -> Result<()> {
         html: include_str!("ui/index.html"),
         backend: hub.into_backend(),
         // Double-clicked: show the window, like any app. From a terminal: stay in the menu bar.
-        open_window: in_app_bundle(),
+        open_window: in_app_bundle() || open_window,
+        hold_key: umless_hotkey::hold_key_label(),
     };
     umless_shell::run(config, move |ui| {
         if let Err(e) = dictate_loop(&c, device.as_deref(), &settings, &ui) {
@@ -179,8 +213,16 @@ fn dictate_loop(c: &Common, device: Option<&str>, settings: &Settings, ui: &Ui) 
         None
     };
     let events = start_hotkey(ui)?;
+    let (hold, cmd) = if cfg!(target_os = "macos") {
+        ("Fn".to_string(), "Control".to_string())
+    } else {
+        (
+            umless_hotkey::hold_key_label(),
+            umless_hotkey::command_key_label(),
+        )
+    };
     eprintln!(
-        "· ready ({} tier). Hold Fn and speak; let go to type it. Fn + Control: command mode. Dictionary: {}",
+        "· ready ({} tier). Hold {hold} and speak; let go to type it. {hold} + {cmd}: command mode. Dictionary: {}",
         c.tier,
         dict_path.display()
     );
@@ -268,7 +310,14 @@ fn dictate_loop(c: &Common, device: Option<&str>, settings: &Settings, ui: &Ui) 
         let spoke = samples_to_secs(rec.audio.len());
         if spoke < MIN_SPEECH_SECS {
             eprintln!("→ too short");
-            ui.set(State::Nothing("Hold Fn while you speak".into()));
+            ui.set(State::Nothing(format!(
+                "Hold {} while you speak",
+                if cfg!(target_os = "macos") {
+                    "Fn".to_string()
+                } else {
+                    umless_hotkey::hold_key_label()
+                }
+            )));
             continue;
         }
         if let Some(problem) = rec.problem(&vad) {

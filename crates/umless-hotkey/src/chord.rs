@@ -130,6 +130,11 @@ impl HoldKey {
         }
     }
 
+    /// "Alt" or "Shift".
+    pub fn command_label(&self) -> &'static str {
+        self.command().label()
+    }
+
     fn is_part(&self, k: Key) -> bool {
         self.keys.iter().any(|g| g.matches(k))
     }

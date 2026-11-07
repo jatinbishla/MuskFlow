@@ -62,6 +62,15 @@ pub fn hold_key_label() -> String {
     }
 }
 
+/// Held with the hold key for command mode: "control" on macOS, "Alt" (or "Shift") elsewhere.
+pub fn command_key_label() -> String {
+    if cfg!(target_os = "macos") {
+        "control".to_string()
+    } else {
+        HoldKey::from_env().command_label().to_string()
+    }
+}
+
 #[cfg_attr(target_os = "macos", allow(dead_code))]
 mod chord;
 pub use chord::HoldKey;

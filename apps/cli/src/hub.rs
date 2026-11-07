@@ -273,6 +273,10 @@ fn setup_status() -> Value {
         "input_monitoring": input_monitoring,
         "fn_key": fn_key,
         "done": mic == "granted" && accessibility && input_monitoring,
+        "os": std::env::consts::OS,
+        "hold_key": umless_hotkey::hold_key_label(),
+        "command_key": umless_hotkey::command_key_label(),
+        "wayland": std::env::var_os("WAYLAND_DISPLAY").is_some(),
     })
 }
 
