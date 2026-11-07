@@ -6,6 +6,8 @@
 //! meantime (the user copied), we don't restore over it. Posting ⌘V needs the
 //! Accessibility permission.
 //!
+//! Windows and Linux paste the same way (see `windows.rs`, `linux.rs`).
+//!
 //! Later: AX `kAXSelectedText` first (clean undo, no clipboard at all), with
 //! paste as the fallback (ARCHITECTURE.md §9).
 
@@ -34,10 +36,23 @@ pub fn copy_selection() -> Option<String> {
 
 /// Inserts `text` at the cursor of the focused app.
 pub fn insert(text: &str) -> Result<()> {
+    insert_into(text, "")
+}
+
+/// Inserts `text` into the focused app, whose id (`Focus::bundle_id`: a macOS bundle id,
+/// a Windows exe name, a Linux window class) picks the paste keys: Linux terminals
+/// paste with Ctrl+Shift+V. Empty if unknown.
+pub fn insert_into(text: &str, app_id: &str) -> Result<()> {
     if text.is_empty() {
         return Ok(());
     }
-    imp::insert(text)
+    #[cfg(target_os = "linux")]
+    return imp::insert(text, app_id);
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = app_id;
+        imp::insert(text)
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -194,7 +209,15 @@ mod imp {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
+#[path = "windows.rs"]
+mod imp;
+
+#[cfg(target_os = "linux")]
+#[path = "linux.rs"]
+mod imp;
+
+#[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
 mod imp {
     use anyhow::{Result, bail};
 

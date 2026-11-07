@@ -346,7 +346,8 @@ fn dictate_loop(c: &Common, device: Option<&str>, settings: &Settings, ui: &Ui) 
             continue;
         }
         // A trailing space so the next dictation doesn't run into this one.
-        match umless_insert::insert(&format!("{text} ")) {
+        let app_id = focus.as_ref().map(|f| f.bundle_id.as_str()).unwrap_or("");
+        match umless_insert::insert_into(&format!("{text} "), app_id) {
             Ok(()) => {
                 let latency = rec.stopped.elapsed();
                 let entry = Entry {
@@ -448,7 +449,8 @@ fn run_command(
         }
     };
     // Replacing a selection: paste over it. New text: paste at the cursor.
-    if let Err(e) = umless_insert::insert(&out.text) {
+    let app_id = focus.map(|f| f.bundle_id.as_str()).unwrap_or("");
+    if let Err(e) = umless_insert::insert_into(&out.text, app_id) {
         eprintln!("→ {e:#}\n  {}", out.text);
         ui.set(State::Error(format!("{e:#}")));
         return;

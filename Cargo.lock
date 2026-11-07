@@ -2178,7 +2178,10 @@ dependencies = [
  "objc2-app-kit",
  "objc2-application-services",
  "objc2-core-foundation",
+ "serde_json",
  "umless-cleanup",
+ "windows-sys 0.61.2",
+ "x11rb",
 ]
 
 [[package]]
@@ -2209,6 +2212,7 @@ dependencies = [
  "objc2-app-kit",
  "objc2-core-graphics",
  "objc2-foundation",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

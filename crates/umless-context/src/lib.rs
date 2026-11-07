@@ -36,7 +36,10 @@ impl Focus {
 
     /// A known web app named in a browser window's title.
     fn web_app(&self) -> Option<&'static str> {
-        if !BROWSERS.contains(&self.bundle_id.as_str()) {
+        if !BROWSERS
+            .iter()
+            .any(|b| self.bundle_id.eq_ignore_ascii_case(b))
+        {
             return None;
         }
         let title = self.title.as_deref()?.to_lowercase();
@@ -101,6 +104,54 @@ const APPS: &[(&str, Style)] = &[
     ("com.hnc.Discord", Style::Casual),
     ("ru.keepcoder.Telegram", Style::Casual),
     ("com.facebook.archon", Style::Casual), // Messenger
+    // Windows (exe name without .exe) and Linux (X11 WM_CLASS / Wayland app id), lowercase.
+    ("claude", Style::Prompt),
+    ("chatgpt", Style::Prompt),
+    ("codex", Style::Prompt),
+    ("cursor", Style::Prompt),
+    ("windsurf", Style::Prompt),
+    ("perplexity", Style::Prompt),
+    ("windowsterminal", Style::Prompt),
+    ("powershell", Style::Prompt),
+    ("pwsh", Style::Prompt),
+    ("cmd", Style::Prompt),
+    ("wezterm-gui", Style::Prompt),
+    ("org.wezfurlong.wezterm", Style::Prompt),
+    ("alacritty", Style::Prompt),
+    ("kitty", Style::Prompt),
+    ("ghostty", Style::Prompt),
+    ("com.mitchellh.ghostty", Style::Prompt),
+    ("warp", Style::Prompt),
+    ("dev.warp.warp", Style::Prompt),
+    ("gnome-terminal-server", Style::Prompt),
+    ("org.gnome.terminal", Style::Prompt),
+    ("org.gnome.console", Style::Prompt),
+    ("org.gnome.ptyxis", Style::Prompt),
+    ("konsole", Style::Prompt),
+    ("org.kde.konsole", Style::Prompt),
+    ("xfce4-terminal", Style::Prompt),
+    ("foot", Style::Prompt),
+    ("tilix", Style::Prompt),
+    ("terminator", Style::Prompt),
+    ("xterm", Style::Prompt),
+    ("outlook", Style::Formal),
+    ("olk", Style::Formal), // new Outlook for Windows
+    ("ms-teams", Style::Formal),
+    ("teams", Style::Formal),
+    ("teams-for-linux", Style::Formal),
+    ("winword", Style::Formal),
+    ("thunderbird", Style::Formal),
+    ("org.mozilla.thunderbird", Style::Formal),
+    ("evolution", Style::Formal),
+    ("org.gnome.evolution", Style::Formal),
+    ("slack", Style::Casual),
+    ("whatsapp", Style::Casual),
+    ("discord", Style::Casual),
+    ("telegram", Style::Casual),
+    ("telegramdesktop", Style::Casual),
+    ("org.telegram.desktop", Style::Casual),
+    ("signal", Style::Casual),
+    ("signal-desktop", Style::Casual),
 ];
 
 const BROWSERS: &[&str] = &[
@@ -113,6 +164,23 @@ const BROWSERS: &[&str] = &[
     "com.vivaldi.Vivaldi",
     "com.operasoftware.Opera",
     "app.zen-browser.zen",
+    // Windows exe names and Linux window classes.
+    "chrome",
+    "google-chrome",
+    "chromium",
+    "chromium-browser",
+    "msedge",
+    "microsoft-edge",
+    "firefox",
+    "org.mozilla.firefox",
+    "brave",
+    "brave-browser",
+    "opera",
+    "vivaldi",
+    "vivaldi-stable",
+    "arc",
+    "zen",
+    "zen-browser",
 ];
 
 /// Web apps by a lowercase fragment of the browser window's title.
@@ -489,7 +557,64 @@ mod imp {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+/// A display name for a Windows exe or Linux window class: "msedge" -> "Edge".
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn display_name(id: &str) -> String {
+    const NAMES: &[(&str, &str)] = &[
+        ("msedge", "Edge"),
+        ("microsoft-edge", "Edge"),
+        ("chrome", "Chrome"),
+        ("google-chrome", "Chrome"),
+        ("chromium", "Chromium"),
+        ("chromium-browser", "Chromium"),
+        ("firefox", "Firefox"),
+        ("org.mozilla.firefox", "Firefox"),
+        ("brave", "Brave"),
+        ("brave-browser", "Brave"),
+        ("windowsterminal", "Terminal"),
+        ("gnome-terminal-server", "Terminal"),
+        ("org.gnome.terminal", "Terminal"),
+        ("org.gnome.console", "Console"),
+        ("pwsh", "PowerShell"),
+        ("powershell", "PowerShell"),
+        ("cmd", "Command Prompt"),
+        ("chatgpt", "ChatGPT"),
+        ("olk", "Outlook"),
+        ("outlook", "Outlook"),
+        ("ms-teams", "Teams"),
+        ("teams", "Teams"),
+        ("teams-for-linux", "Teams"),
+        ("winword", "Word"),
+        ("whatsapp", "WhatsApp"),
+        ("telegramdesktop", "Telegram"),
+        ("org.telegram.desktop", "Telegram"),
+        ("signal-desktop", "Signal"),
+        ("org.wezfurlong.wezterm", "WezTerm"),
+        ("wezterm-gui", "WezTerm"),
+        ("org.kde.konsole", "Konsole"),
+    ];
+    let lower = id.to_ascii_lowercase();
+    if let Some((_, name)) = NAMES.iter().find(|(k, _)| *k == lower) {
+        return name.to_string();
+    }
+    // "org.gnome.Nautilus" -> "Nautilus"; "slack" -> "Slack".
+    let last = id.rsplit('.').next().unwrap_or(id);
+    let mut c = last.chars();
+    match c.next() {
+        Some(f) => f.to_uppercase().chain(c).collect(),
+        None => String::new(),
+    }
+}
+
+#[cfg(windows)]
+#[path = "windows.rs"]
+mod imp;
+
+#[cfg(target_os = "linux")]
+#[path = "linux.rs"]
+mod imp;
+
+#[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
 mod imp {
     pub fn focused() -> Option<super::Focus> {
         None
@@ -515,6 +640,32 @@ mod tests {
             app: app.into(),
             title: title.map(String::from),
         }
+    }
+
+    #[test]
+    fn windows_and_linux_apps_pick_their_style() {
+        assert_eq!(focus("slack", "Slack", None).style(), Style::Casual);
+        assert_eq!(
+            focus("windowsterminal", "Terminal", None).style(),
+            Style::Prompt
+        );
+        assert_eq!(focus("olk", "Outlook", None).style(), Style::Formal);
+        assert_eq!(
+            focus("org.gnome.terminal", "Terminal", None).style(),
+            Style::Prompt
+        );
+        let gmail = focus("msedge", "Edge", Some("Inbox (3) - Gmail - Microsoft Edge"));
+        assert_eq!(gmail.style(), Style::Formal);
+        assert_eq!(gmail.label(), "Gmail (Edge)");
+        let chat = focus("google-chrome", "Chrome", Some("ChatGPT - Google Chrome"));
+        assert_eq!(chat.style(), Style::Prompt);
+    }
+
+    #[test]
+    fn display_names() {
+        assert_eq!(display_name("msedge"), "Edge");
+        assert_eq!(display_name("slack"), "Slack");
+        assert_eq!(display_name("org.gnome.Nautilus"), "Nautilus");
     }
 
     #[test]
