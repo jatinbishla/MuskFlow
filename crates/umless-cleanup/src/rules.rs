@@ -9,6 +9,32 @@ pub fn is_filler(word: &str) -> bool {
     FILLERS.contains(&word)
 }
 
+/// Phrases a speech model gets wrong in work talk, where the word it heard can't be meant:
+/// nobody "sings tomorrow" with a team or has a "deploy field". Whole phrases only.
+const MISHEARD: &str = "\
+let's sync = let's sing, lets sing
+sync up = sing up
+quick sync = quick sing
+deploy failed = deploy field
+build failed = build field
+tests failed = tests field
+test failed = test field
+CI failed = ci field
+Kubernetes pod = kubernetes board
+the pod keeps = the board keeps
+Postgres = post disk, post risk, postress, post gress
+Redis cache = redis cachet, rediscay
+TypeScript = type script
+GitHub = get hub
+";
+
+/// Fixes [`MISHEARD`] phrases.
+pub fn fix_misheard(text: &str) -> String {
+    static FIXES: std::sync::LazyLock<crate::Dictionary> =
+        std::sync::LazyLock::new(|| crate::Dictionary::parse(MISHEARD).without_terms());
+    FIXES.apply(text)
+}
+
 /// Words "you know" leads into when it's a real question or clause ("you know what I mean").
 const KNOW_OBJECTS: &[&str] = &[
     "that", "what", "how", "why", "who", "where", "when", "whether", "if", "about", "him", "her",
@@ -534,5 +560,24 @@ mod tests {
         ] {
             assert_eq!(clean(kept).to_lowercase(), kept.to_lowercase());
         }
+    }
+
+    #[test]
+    fn fixes_misheard_work_phrases() {
+        assert_eq!(
+            fix_misheard(
+                "Let's sing tomorrow at 10. The staging deploy field again, the Kubernetes board keeps crashing"
+            ),
+            "Let's sync tomorrow at 10. The staging deploy failed again, the Kubernetes pod keeps crashing"
+        );
+        assert_eq!(
+            fix_misheard("the post disk connection string"),
+            "the Postgres connection string"
+        );
+        // The same words in other places stay.
+        assert_eq!(
+            fix_misheard("we sing in a choir on the field"),
+            "we sing in a choir on the field"
+        );
     }
 }

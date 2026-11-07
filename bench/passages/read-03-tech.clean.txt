@@ -1,0 +1,1 @@
+Okay, so the staging deploy failed again. The Kubernetes pod keeps crashing because the Postgres connection string is wrong, and the Redis cache isn't warming up. Can you open a pull request on GitHub that fixes the environment variables, add a test for the API endpoint, and then rerun the TypeScript build? Once it's green, merge it into main and ping me on Slack.

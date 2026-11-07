@@ -341,12 +341,7 @@ impl Committer<'_> {
             if found.is_empty() {
                 continue;
             }
-            log::info!(
-                "rescued {:.1}–{:.1}s: {}",
-                lo,
-                hi,
-                join_words(&found)
-            );
+            log::info!("rescued {:.1}–{:.1}s: {}", lo, hi, join_words(&found));
             self.stats.rescued += 1;
             self.committed.splice(at..at, found);
         }
@@ -722,7 +717,10 @@ mod tests {
         };
         let texts = |ws: Vec<Word>| join_words(&ws);
         // The word before heard again, then a hesitation: nothing new.
-        assert_eq!(texts(new_words(vec![w("my,"), w("um,")], Some(&w("my")), None)), "");
+        assert_eq!(
+            texts(new_words(vec![w("my,"), w("um,")], Some(&w("my")), None)),
+            ""
+        );
         assert_eq!(
             texts(new_words(
                 vec![w("my"), w("auth"), w("middleware"), w("no")],

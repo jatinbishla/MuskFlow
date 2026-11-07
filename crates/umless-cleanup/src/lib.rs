@@ -252,7 +252,9 @@ impl Cleaner {
     /// Command mode: carries out a spoken instruction on the selection or at the cursor.
     /// The instruction gets the same dictionary and filler cleanup as dictation first.
     pub fn command(&self, raw: &str, cx: &command::Context) -> Result<command::Commanded> {
-        let instruction = rules::clean(&rules::retract(&self.dictionary.apply(raw)));
+        let instruction = rules::clean(&rules::retract(&rules::fix_misheard(
+            &self.dictionary.apply(raw),
+        )));
         let mut out = command::run(&self.llm, &instruction, cx)?;
         out.text = self.dictionary.apply(&out.text);
         Ok(out)
@@ -266,7 +268,7 @@ impl Cleaner {
     /// invented names and numbers rather than word-for-word, since they rephrase.
     pub fn clean_as(&self, raw: &str, style: Style) -> Result<Cleaned> {
         let t = Instant::now();
-        let raw = &rules::retract(&self.dictionary.apply(raw));
+        let raw = &rules::retract(&rules::fix_misheard(&self.dictionary.apply(raw)));
         let ruled = rules::mark_questions(&numbers::to_digits(&rules::clean(raw)));
         if ruled.is_empty() || !needs_llm(raw) {
             return Ok(Cleaned {
@@ -326,7 +328,7 @@ impl Cleaner {
 /// What the app types when no LLM is loaded, and what the guard falls back to.
 pub fn without_llm(raw: &str, dictionary: &Dictionary) -> String {
     rules::mark_questions(&numbers::to_digits(&rules::clean(&rules::retract(
-        &dictionary.apply(raw),
+        &rules::fix_misheard(&dictionary.apply(raw)),
     ))))
 }
 

@@ -328,13 +328,14 @@ pub(crate) fn asr_dir(c: &Common) -> PathBuf {
 
 /// `--hotwords` plus the `--dictionary` file.
 pub(crate) fn dictionary(c: &Common) -> Result<Dictionary> {
-    let mut terms = c.hotwords.clone();
-    if let Some(path) = &c.dictionary {
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("could not read dictionary {}", path.display()))?;
-        terms.extend(Dictionary::parse(&text).terms().map(String::from));
-    }
-    Ok(Dictionary::new(terms))
+    let file = match &c.dictionary {
+        Some(path) => Dictionary::parse(
+            &std::fs::read_to_string(path)
+                .with_context(|| format!("could not read dictionary {}", path.display()))?,
+        ),
+        None => Dictionary::default(),
+    };
+    Ok(file.with_terms(&c.hotwords))
 }
 
 /// Terms the speech model itself is biased towards; only with `--hotword-boost`.

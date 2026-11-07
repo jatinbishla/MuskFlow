@@ -42,6 +42,9 @@ const DICTIONARY_TEMPLATE: &str = "\
 # SubFlo
 # Jatin Bishla
 # lien waivers
+#
+# If a word keeps coming out as something else, add what you hear after \"=\":
+# Gaurav = Gorov, Barraf
 ";
 
 /// Whether this binary is running as Umless.app (double-clicked, no arguments).
@@ -505,9 +508,7 @@ fn check_corrections(
     match learn::save(path, &words) {
         Ok(()) => {
             // The dictionary file's change is picked up before the next dictation.
-            *dict = umless_cleanup::Dictionary::new(
-                dict.terms().map(String::from).chain(words.iter().cloned()),
-            );
+            *dict = dict.with_terms(&words);
             eprintln!("· learned from your correction: {}", words.join(", "));
             ui.set(State::Nothing(format!(
                 "Added {} to your dictionary",

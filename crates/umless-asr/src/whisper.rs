@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Result, anyhow};
 use sherpa_onnx::{OfflineRecognizer, OfflineRecognizerConfig, OfflineWhisperModelConfig};
 
-use crate::{Hypothesis, Transcriber};
+use crate::{Hypothesis, Transcriber, Word};
 
 const SAMPLE_RATE: i32 = 16_000;
 
@@ -91,13 +91,28 @@ impl Transcriber for WhisperTranscriber {
             .get_result()
             .ok_or_else(|| anyhow!("decoder returned no result"))?;
         let audio_end = pcm.len() as f32 / SAMPLE_RATE as f32;
+        if r.timestamps.as_ref().is_some_and(|t| !t.is_empty()) {
+            return Ok(Hypothesis {
+                words: crate::parakeet::tokens_to_words(
+                    &r.tokens,
+                    r.timestamps.as_deref(),
+                    None,
+                    audio_end,
+                ),
+            });
+        }
+        // Without timestamps, take words from the decoded text: Whisper's tokens are byte
+        // pieces, and joining them one by one breaks multi-byte scripts (Hindi, Japanese).
         Ok(Hypothesis {
-            words: crate::parakeet::tokens_to_words(
-                &r.tokens,
-                r.timestamps.as_deref(),
-                None,
-                audio_end,
-            ),
+            words: r
+                .text
+                .split_whitespace()
+                .map(|w| Word {
+                    text: w.to_string(),
+                    start: 0.0,
+                    end: audio_end,
+                })
+                .collect(),
         })
     }
 }

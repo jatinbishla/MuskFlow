@@ -15,6 +15,9 @@ const LONG_TERM: usize = 8;
 #[derive(Debug, Clone, Default)]
 pub struct Dictionary {
     terms: Vec<Term>,
+    /// What the speech model hears instead of a term, written by the user as
+    /// "Gaurav = Gorov, Barraf": exact word runs (lowercase, no punctuation) → term.
+    aliases: Vec<(Vec<String>, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -45,16 +48,59 @@ impl Dictionary {
             .collect();
         // Longer terms first, so "lien waivers" wins over "lien".
         terms.sort_by_key(|t| std::cmp::Reverse(t.letters.len()));
-        Self { terms }
+        Self {
+            terms,
+            aliases: Vec::new(),
+        }
     }
 
-    /// One term per line; blank lines and `#` comments are ignored.
+    /// One term per line; blank lines and `#` comments are ignored. "Term = heard, heard"
+    /// also lists what the speech model types instead of it.
     pub fn parse(text: &str) -> Self {
-        Self::new(
-            text.lines()
-                .map(|l| l.split('#').next().unwrap_or("").trim())
-                .filter(|l| !l.is_empty()),
-        )
+        let lines: Vec<&str> = text
+            .lines()
+            .map(|l| l.split('#').next().unwrap_or("").trim())
+            .filter(|l| !l.is_empty())
+            .collect();
+        let mut dict = Self::new(
+            lines
+                .iter()
+                .map(|l| l.split('=').next().unwrap_or("").trim()),
+        );
+        for line in lines {
+            let Some((term, heard)) = line.split_once('=') else {
+                continue;
+            };
+            for alias in heard.split(',') {
+                let words: Vec<String> = alias.split_whitespace().map(alias_word).collect();
+                if !words.is_empty() && !term.trim().is_empty() {
+                    dict.aliases.push((words, term.trim().to_string()));
+                }
+            }
+        }
+        // Longest first, so "Jonathan Mishla" wins over "Jonathan".
+        dict.aliases
+            .sort_by_key(|(w, _)| std::cmp::Reverse(w.len()));
+        dict
+    }
+
+    /// Only the "heard as" entries: no near-miss respelling of the terms themselves.
+    pub fn without_terms(mut self) -> Self {
+        self.terms.clear();
+        self
+    }
+
+    /// This dictionary with more terms; its "heard as" entries are kept.
+    pub fn with_terms<S: AsRef<str>>(&self, extra: impl IntoIterator<Item = S>) -> Self {
+        let mut d = Self::new(
+            self.terms
+                .iter()
+                .filter(|t| !t.screen)
+                .map(|t| t.text.clone())
+                .chain(extra.into_iter().map(|s| s.as_ref().to_string())),
+        );
+        d.aliases = self.aliases.clone();
+        d
     }
 
     /// This dictionary plus names read off the screen. The user's own terms win a tie.
@@ -67,11 +113,14 @@ impl Dictionary {
         let mut terms = self.terms.clone();
         terms.extend(extra);
         terms.sort_by_key(|t| (std::cmp::Reverse(t.letters.len()), t.screen));
-        Self { terms }
+        Self {
+            terms,
+            aliases: self.aliases.clone(),
+        }
     }
 
     pub fn is_empty(&self) -> bool {
-        self.terms.is_empty()
+        self.terms.is_empty() && self.aliases.is_empty()
     }
 
     pub fn terms(&self) -> impl Iterator<Item = &str> {
@@ -80,6 +129,7 @@ impl Dictionary {
 
     /// Respells transcript words that are a near miss for a dictionary term.
     pub fn apply(&self, text: &str) -> String {
+        let text = &self.apply_aliases(text);
         if self.terms.is_empty() {
             return text.to_string();
         }
@@ -103,6 +153,36 @@ impl Dictionary {
                     i += 1;
                 }
             }
+        }
+        out.join(" ")
+    }
+
+    /// Replaces each "heard as" run with its term, keeping the punctuation around it.
+    fn apply_aliases(&self, text: &str) -> String {
+        if self.aliases.is_empty() {
+            return text.to_string();
+        }
+        let toks: Vec<&str> = text.split_whitespace().collect();
+        let words: Vec<String> = toks.iter().map(|t| alias_word(t)).collect();
+        let mut out: Vec<String> = Vec::with_capacity(toks.len());
+        let mut i = 0;
+        'next: while i < toks.len() {
+            for (heard, term) in &self.aliases {
+                let n = heard.len();
+                // Only the last word of the run may carry punctuation after it.
+                if i + n <= toks.len()
+                    && words[i..i + n] == heard[..]
+                    && toks[i..i + n - 1]
+                        .iter()
+                        .all(|t| t.ends_with(char::is_alphanumeric))
+                {
+                    out.push(respell(&toks[i..i + n], term));
+                    i += n;
+                    continue 'next;
+                }
+            }
+            out.push(toks[i].to_string());
+            i += 1;
         }
         out.join(" ")
     }
@@ -177,6 +257,11 @@ fn edits_to(term: &Term, said: &str) -> Option<usize> {
 }
 
 /// The term, keeping the window's surrounding punctuation and a sentence-initial capital.
+fn alias_word(w: &str) -> String {
+    w.trim_matches(|c: char| !c.is_alphanumeric())
+        .to_lowercase()
+}
+
 fn respell(window: &[&str], term: &str) -> String {
     let first = window[0];
     let last = window[window.len() - 1];
@@ -331,5 +416,28 @@ mod tests {
     fn parses_a_dictionary_file() {
         let d = Dictionary::parse("# names\nSubFlo\n\nlien waivers  # construction\n");
         assert_eq!(d.terms().collect::<Vec<_>>(), ["lien waivers", "SubFlo"]);
+    }
+
+    #[test]
+    fn heard_as_entries_are_replaced_exactly() {
+        let d = Dictionary::parse(
+            "Gaurav = Gorov, Barraf\nJatin Bishla = Jonathan Mishla\nretainage = it and age\nSubFlo",
+        );
+        assert_eq!(
+            d.apply("Barraf, can you take it"),
+            "Gaurav, can you take it"
+        );
+        assert_eq!(
+            d.apply("I'm Jonathan Mishla, co founder of Subflow"),
+            "I'm Jatin Bishla, co founder of SubFlo"
+        );
+        assert_eq!(
+            d.apply("wait 60 days for it and age."),
+            "wait 60 days for retainage."
+        );
+        // A run interrupted by punctuation is not the alias.
+        assert_eq!(d.apply("for it. And age is"), "for it. And age is");
+        // Adding terms keeps the heard-as entries.
+        assert_eq!(d.with_terms(["Priya"]).apply("Gorov"), "Gaurav");
     }
 }
