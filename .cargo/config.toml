@@ -1,0 +1,8 @@
+# Windows: sherpa-onnx's prebuilt static libraries use the static C runtime (/MT), so
+# Rust and llama.cpp must too, or the link fails with LNK2038/LNK2005 RuntimeLibrary
+# mismatches. LLAMA_STATIC_CRT only affects MSVC builds.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[env]
+LLAMA_STATIC_CRT = "1"

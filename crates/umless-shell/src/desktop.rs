@@ -516,8 +516,28 @@ pub fn launch_at_login() -> bool {
     autostart_file().is_some_and(|p| p.exists())
 }
 
-pub fn set_launch_at_login(on: bool) -> anyhow::Result<()> {
+/// The command a login item runs: this binary with the models folder and tier spelled
+/// out, since a process started at login has no useful working directory or environment.
+fn login_command() -> anyhow::Result<String> {
     let exe = std::env::current_exe()?;
+    let models = std::env::var_os("UMLESS_MODELS")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("models"));
+    let models = if models.is_absolute() {
+        models
+    } else {
+        std::env::current_dir()?.join(models)
+    };
+    let mut cmd = format!("\"{}\" --models \"{}\"", exe.display(), models.display());
+    if let Ok(tier) = std::env::var("UMLESS_TIER") {
+        cmd.push_str(&format!(" --tier {tier}"));
+    }
+    cmd.push_str(" app");
+    Ok(cmd)
+}
+
+pub fn set_launch_at_login(on: bool) -> anyhow::Result<()> {
+    let line = login_command()?;
     #[cfg(windows)]
     {
         let mut cmd = std::process::Command::new("reg");
@@ -530,7 +550,7 @@ pub fn set_launch_at_login(on: bool) -> anyhow::Result<()> {
                 "/t",
                 "REG_SZ",
                 "/d",
-                &format!("\"{}\" app", exe.display()),
+                &line,
                 "/f",
             ]);
         } else {
@@ -554,8 +574,7 @@ pub fn set_launch_at_login(on: bool) -> anyhow::Result<()> {
             std::fs::write(
                 &path,
                 format!(
-                    "[Desktop Entry]\nType=Application\nName=Umless\nComment=Local voice dictation\nExec=\"{}\" app\nIcon=umless\nX-GNOME-Autostart-enabled=true\n",
-                    exe.display()
+                    "[Desktop Entry]\nType=Application\nName=Umless\nComment=Local voice dictation\nExec={line}\nIcon=umless\nX-GNOME-Autostart-enabled=true\n"
                 ),
             )?;
         } else if path.exists() {
