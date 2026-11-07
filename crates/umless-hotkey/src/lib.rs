@@ -7,6 +7,15 @@
 //! macOS: a listen-only CGEventTap on a background run-loop thread. It needs the
 //! Input Monitoring permission, and it can't stop the system's own Fn action, so
 //! users should set *System Settings → Keyboard → Press 🌐 key to → Do Nothing*.
+//!
+//! Windows and Linux have no Fn key that software can see, so they use a [`HoldKey`]
+//! instead (default **Ctrl + Win**, like Wispr Flow; `UMLESS_HOLD_KEY=right-ctrl` and
+//! others pick another). Adding **Alt** while holding it is command mode (**Shift** when
+//! the hold key itself uses Alt).
+//!
+//! - Windows: a low-level keyboard hook (`SetWindowsHookExW(WH_KEYBOARD_LL)`). No permission.
+//! - Linux: evdev (`/dev/input/event*`), which works on Wayland and X11 but needs the user
+//!   in the `input` group. Without it, on X11 it falls back to the XRecord extension.
 
 use anyhow::Result;
 use crossbeam_channel::Receiver;
@@ -43,6 +52,19 @@ pub fn request_permission() -> bool {
 pub fn start() -> Result<Receiver<Event>> {
     imp::start()
 }
+
+/// What to say in the UI: "Fn" on macOS, "Ctrl + Win" (or the configured key) elsewhere.
+pub fn hold_key_label() -> String {
+    if cfg!(target_os = "macos") {
+        "Fn".to_string()
+    } else {
+        HoldKey::from_env().label()
+    }
+}
+
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+mod chord;
+pub use chord::HoldKey;
 
 /// Pure state machine, kept apart from the OS hook so it can be tested.
 #[derive(Debug, Default)]
@@ -225,7 +247,15 @@ mod imp {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
+#[path = "windows.rs"]
+mod imp;
+
+#[cfg(target_os = "linux")]
+#[path = "linux.rs"]
+mod imp;
+
+#[cfg(not(any(target_os = "macos", windows, target_os = "linux")))]
 mod imp {
     use anyhow::{Result, bail};
     use crossbeam_channel::Receiver;
@@ -241,7 +271,7 @@ mod imp {
     }
 
     pub fn start() -> Result<Receiver<Event>> {
-        bail!("the Fn hotkey is macOS-only for now")
+        bail!("the push-to-talk hotkey isn't supported on this OS yet")
     }
 }
 
