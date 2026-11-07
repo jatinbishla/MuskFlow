@@ -1,5 +1,5 @@
 //! Dictation history, kept only on this Mac: one JSON object per line in
-//! `~/Library/Application Support/Umless/history.jsonl`. Shown in the Umless window.
+//! `history.jsonl` in the data folder (`paths::data_dir`). Shown in the Umless window.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -46,10 +46,7 @@ impl History {
     }
 
     pub fn default_path() -> PathBuf {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_default();
-        home.join("Library/Application Support/Umless/history.jsonl")
+        crate::paths::data_dir().join("history.jsonl")
     }
 
     pub fn now_ms() -> u64 {

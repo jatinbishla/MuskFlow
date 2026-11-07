@@ -54,13 +54,13 @@ pub fn in_app_bundle() -> bool {
         .unwrap_or(false)
 }
 
-/// A double-clicked app has no terminal: send stderr to `~/Library/Logs/Umless.log`.
+/// A double-clicked app has no terminal: send stderr to the log file (`paths::log_path`).
 pub fn log_to_file() {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_default();
-    let path = home.join("Library/Logs/Umless.log");
-    #[cfg(target_os = "macos")]
+    let path = crate::paths::log_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    #[cfg(unix)]
     if let Ok(file) = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
@@ -71,25 +71,21 @@ pub fn log_to_file() {
         unsafe { libc::dup2(file.as_raw_fd(), libc::STDERR_FILENO) };
         std::mem::forget(file);
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(unix))]
     let _ = path;
 }
 
-/// `~/Library/Application Support/Umless/dictionary.txt`.
+/// `dictionary.txt` in the data folder (`paths::data_dir`).
 fn default_dictionary() -> PathBuf {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_default();
-    home.join("Library/Application Support/Umless/dictionary.txt")
+    crate::paths::data_dir().join("dictionary.txt")
 }
 
 /// Umless was called MuskFlow: carry the user's history, dictionary and settings over.
 fn move_old_data() {
-    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+    let new = crate::paths::data_dir();
+    let Some(old) = new.parent().map(|p| p.join("MuskFlow")) else {
         return;
     };
-    let support = home.join("Library/Application Support");
-    let (old, new) = (support.join("MuskFlow"), support.join("Umless"));
     if old.is_dir() && !new.exists() {
         match std::fs::rename(&old, &new) {
             Ok(()) => eprintln!(

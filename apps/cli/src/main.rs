@@ -5,6 +5,7 @@ mod bench;
 mod history;
 mod hub;
 mod learn;
+mod paths;
 mod settings;
 
 use std::io::{BufRead, Write};

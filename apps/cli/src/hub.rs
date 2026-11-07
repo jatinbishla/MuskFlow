@@ -156,6 +156,7 @@ impl Hub {
                     }
                     "mic_settings" => open_settings("Privacy_Microphone"),
                     "keyboard" => {
+                        #[cfg(target_os = "macos")]
                         let _ = std::process::Command::new("open")
                             .arg("x-apple.systempreferences:com.apple.Keyboard-Settings.extension")
                             .spawn();
@@ -172,10 +173,13 @@ impl Hub {
                     "input_monitoring" => "ListenEvent",
                     other => bail!("can't reset {other}"),
                 };
+                #[cfg(target_os = "macos")]
                 std::process::Command::new("tccutil")
                     .args(["reset", service, BUNDLE_ID])
                     .status()
                     .context("could not run tccutil")?;
+                #[cfg(not(target_os = "macos"))]
+                let _ = (service, BUNDLE_ID);
                 json!(true)
             }
             "restart" => {
@@ -197,23 +201,15 @@ impl Hub {
                 json!(umless_shell::launch_at_login())
             }
             "open" => {
-                let (flag, path) = match arg_str(args, "what")? {
-                    "dictionary" => ("-t", self.dictionary.clone()),
-                    "history" => ("-R", self.history.clone()),
-                    "log" => ("-t", log_path()),
-                    "privacy" => (
-                        "",
-                        PathBuf::from(
-                            "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent",
-                        ),
-                    ),
+                use crate::paths::Open;
+                let (how, path) = match arg_str(args, "what")? {
+                    "dictionary" => (Open::Edit, self.dictionary.clone()),
+                    "history" => (Open::Reveal, self.history.clone()),
+                    "log" => (Open::Edit, log_path()),
+                    "privacy" => (Open::Default, PathBuf::from(PRIVACY_SETTINGS)),
                     other => bail!("can't open {other}"),
                 };
-                let mut open = std::process::Command::new("open");
-                if !flag.is_empty() {
-                    open.arg(flag);
-                }
-                open.arg(path).spawn().context("could not run open")?;
+                crate::paths::open(&path, how).context("could not open it")?;
                 json!(true)
             }
             other => bail!("unknown command {other}"),
@@ -233,12 +229,29 @@ impl Hub {
 
 const BUNDLE_ID: &str = "io.github.jatinbishla.umless";
 
+#[cfg(target_os = "macos")]
+const PRIVACY_SETTINGS: &str =
+    "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent";
+#[cfg(windows)]
+const PRIVACY_SETTINGS: &str = "ms-settings:privacy-microphone";
+#[cfg(not(any(target_os = "macos", windows)))]
+const PRIVACY_SETTINGS: &str = "settings://";
+
 fn open_settings(pane: &str) {
-    let _ = std::process::Command::new("open")
-        .arg(format!(
-            "x-apple.systempreferences:com.apple.preference.security?{pane}"
-        ))
-        .spawn();
+    #[cfg(target_os = "macos")]
+    let url = format!("x-apple.systempreferences:com.apple.preference.security?{pane}");
+    // Windows has a settings page only for the microphone; the rest needs no permission.
+    #[cfg(windows)]
+    let url = match pane {
+        "Privacy_Microphone" => "ms-settings:privacy-microphone".to_string(),
+        _ => return,
+    };
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let url = {
+        let _ = pane;
+        return;
+    };
+    let _ = crate::paths::open(std::path::Path::new(&url), crate::paths::Open::Default);
 }
 
 /// Everything the setup screen checks. `done` once dictation can work end to end.
@@ -262,6 +275,10 @@ fn setup_status() -> Value {
 
 /// What the 🌐/fn key does on its own (System Settings → Keyboard → "Press 🌐 key to").
 fn fn_key_action() -> &'static str {
+    // Only macOS has a 🌐 key setting; elsewhere the hold key has no system action.
+    if !cfg!(target_os = "macos") {
+        return "nothing";
+    }
     let out = std::process::Command::new("defaults")
         .args(["read", "com.apple.HIToolbox", "AppleFnUsageType"])
         .output();
@@ -294,6 +311,14 @@ fn restart() {
             .spawn();
         std::process::exit(0);
     }
+    // Not a macOS bundle (Windows, Linux, or a terminal build): start the same binary again.
+    #[cfg(not(target_os = "macos"))]
+    if let Ok(exe) = std::env::current_exe() {
+        let _ = std::process::Command::new(exe)
+            .args(std::env::args_os().skip(1))
+            .spawn();
+        std::process::exit(0);
+    }
 }
 
 fn line_term(line: &str) -> Option<&str> {
@@ -302,10 +327,7 @@ fn line_term(line: &str) -> Option<&str> {
 }
 
 fn log_path() -> PathBuf {
-    let home = std::env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_default();
-    home.join("Library/Logs/Umless.log")
+    crate::paths::log_path()
 }
 
 fn arg_str<'a>(args: &'a Value, key: &str) -> Result<&'a str> {

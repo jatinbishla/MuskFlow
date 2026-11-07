@@ -1,5 +1,5 @@
 //! The user's choices from the Umless window, in
-//! `~/Library/Application Support/Umless/settings.json`.
+//! `settings.json` in the data folder (`paths::data_dir`).
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -33,10 +33,7 @@ pub struct Settings {
 
 impl Settings {
     pub fn load() -> Self {
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_default();
-        let path = home.join("Library/Application Support/Umless/settings.json");
+        let path = crate::paths::data_dir().join("settings.json");
         let data = std::fs::read_to_string(&path)
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
