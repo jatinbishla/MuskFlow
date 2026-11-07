@@ -543,15 +543,7 @@ pub fn set_launch_at_login(on: bool) -> anyhow::Result<()> {
         let mut cmd = std::process::Command::new("reg");
         if on {
             cmd.args([
-                "add",
-                RUN_KEY,
-                "/v",
-                "Umless",
-                "/t",
-                "REG_SZ",
-                "/d",
-                &line,
-                "/f",
+                "add", RUN_KEY, "/v", "Umless", "/t", "REG_SZ", "/d", &line, "/f",
             ]);
         } else {
             cmd.args(["delete", RUN_KEY, "/v", "Umless", "/f"]);

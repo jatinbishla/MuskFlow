@@ -8,6 +8,10 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: ${{ matrix.os }}
@@ -40,6 +44,14 @@ jobs:
       - name: Headless CLI (no GTK)
         if: runner.os == 'Linux'
         run: cargo check --release --locked -p umless-cli --no-default-features
+
+      - name: Installer syntax
+        shell: bash
+        run: |
+          bash -n install.sh
+          if [ "$RUNNER_OS" = Windows ]; then
+            pwsh -NoProfile -Command '$e=$null; [System.Management.Automation.Language.Parser]::ParseFile("install.ps1",[ref]$null,[ref]$e) | Out-Null; if ($e) { $e; exit 1 }'
+          fi
 
       - name: CLI smoke test
         shell: bash
