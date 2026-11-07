@@ -31,5 +31,5 @@ objc2-web-kit = { version = "0.3.2", default-features = false, features = ["std"
 [target.'cfg(any(windows, target_os = "linux"))'.dependencies]
 tao = { version = "0.37", optional = true }
 wry = { version = "0.57", optional = true }
-tray-icon = { version = "0.26", optional = true, default-features = false }
+tray-icon = { version = "0.26", optional = true }
 cpal = { workspace = true, optional = true }
