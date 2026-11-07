@@ -8,5 +8,10 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 umless-audio.workspace = true
-sherpa-onnx.workspace = true
 log.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+sherpa-onnx = { workspace = true, features = ["shared"] }
+
+[target.'cfg(not(windows))'.dependencies]
+sherpa-onnx = { workspace = true, features = ["static"] }

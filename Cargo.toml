@@ -26,7 +26,9 @@ rtrb = "0.4"
 crossbeam-channel = "0.5"
 hound = "3.5"
 clap = { version = "4.6", features = ["derive", "env"] }
-sherpa-onnx = "2.0.1"
+# Linked statically except on Windows, where its prebuilt static libs use the static C
+# runtime (/MT) and llama.cpp the dynamic one (/MD): see the crates' target sections.
+sherpa-onnx = { version = "2.0.1", default-features = false }
 log = "0.4"
 env_logger = "0.11"
 

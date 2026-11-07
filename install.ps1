@@ -72,6 +72,8 @@ $dest = Join-Path $env:LOCALAPPDATA 'Programs\Umless'
 New-Item -ItemType Directory -Force $dest | Out-Null
 Get-Process umless -ErrorAction SilentlyContinue | Stop-Process -Force
 Copy-Item $bin (Join-Path $dest 'umless.exe') -Force
+# sherpa-onnx (speech) and onnxruntime are DLLs on Windows: they go next to the exe.
+Get-ChildItem (Join-Path $PSScriptRoot 'target\release') -Filter *.dll | Copy-Item -Destination $dest -Force
 $exe = Join-Path $dest 'umless.exe'
 $appArgs = "--models `"$models`" --tier $tier app --window"
 

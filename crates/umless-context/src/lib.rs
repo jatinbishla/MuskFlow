@@ -253,6 +253,7 @@ pub fn field_text(pid: i32) -> Option<String> {
 }
 
 /// Keeps the last `max` characters of `s`, starting at a line or word break.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn tail(s: &str, max: usize) -> String {
     let Some((start, _)) = s.char_indices().rev().nth(max) else {
         return s.to_string();

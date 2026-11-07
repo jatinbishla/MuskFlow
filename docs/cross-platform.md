@@ -100,9 +100,12 @@ run by hand on a real desktop:
 
 ## Build notes
 
-- Windows: sherpa-onnx's prebuilt static libraries use the static C runtime (/MT), so
-  `.cargo/config.toml` builds Rust with `+crt-static` and llama.cpp with `LLAMA_STATIC_CRT=1`.
-  Without it, linking fails with LNK2038 RuntimeLibrary mismatches.
+- Windows: sherpa-onnx's prebuilt *static* libraries use the static C runtime (/MT) while
+  llama.cpp builds with the dynamic one (/MD), which fails to link (LNK2038). So on Windows
+  sherpa-onnx is linked as DLLs (its `shared` feature; `umless-asr` / `umless-audio` target
+  sections). Its build script copies `sherpa-onnx-c-api.dll` and `onnxruntime.dll` into
+  `target\release`, and `install.ps1` ships them next to `umless.exe`. (`LLAMA_STATIC_CRT=1`
+  doesn't help: llama.cpp's CMake runtime-library policy overrides cc's `/MT`.)
 - Linux: the desktop app needs `libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev`
   (and `libasound2-dev`, `clang`, `cmake` for the core). `--no-default-features` drops the GUI.
 - GitHub retired the `macos-14` runners; CI uses `macos-15`.
