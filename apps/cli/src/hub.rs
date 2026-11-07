@@ -238,20 +238,23 @@ const PRIVACY_SETTINGS: &str = "ms-settings:privacy-microphone";
 const PRIVACY_SETTINGS: &str = "settings://";
 
 fn open_settings(pane: &str) {
-    #[cfg(target_os = "macos")]
-    let url = format!("x-apple.systempreferences:com.apple.preference.security?{pane}");
-    // Windows has a settings page only for the microphone; the rest needs no permission.
-    #[cfg(windows)]
-    let url = match pane {
-        "Privacy_Microphone" => "ms-settings:privacy-microphone".to_string(),
-        _ => return,
-    };
-    #[cfg(not(any(target_os = "macos", windows)))]
-    let url = {
-        let _ = pane;
-        return;
-    };
-    let _ = crate::paths::open(std::path::Path::new(&url), crate::paths::Open::Default);
+    if let Some(url) = settings_url(pane) {
+        let _ = crate::paths::open(std::path::Path::new(&url), crate::paths::Open::Default);
+    }
+}
+
+/// The OS settings page for a macOS privacy pane name. Windows has one only for the
+/// microphone; Linux has none (permissions are groups and installed tools).
+fn settings_url(pane: &str) -> Option<String> {
+    if cfg!(target_os = "macos") {
+        Some(format!(
+            "x-apple.systempreferences:com.apple.preference.security?{pane}"
+        ))
+    } else if cfg!(windows) && pane == "Privacy_Microphone" {
+        Some("ms-settings:privacy-microphone".into())
+    } else {
+        None
+    }
 }
 
 /// Everything the setup screen checks. `done` once dictation can work end to end.
