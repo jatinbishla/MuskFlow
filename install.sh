@@ -132,9 +132,14 @@ if [ "$(uname -s)" = Darwin ]; then
 elif [ "$(uname -s)" = Linux ]; then
   say "Installing umless…"
   MODELS="${UMLESS_MODELS:-$PWD/models}"
-  mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications"
+  # The binary finds its speech libraries (sherpa-onnx, onnxruntime) next to itself
+  # ($ORIGIN rpath), so both go in one folder, linked into ~/.local/bin.
+  LIBDIR="$HOME/.local/lib/umless"
+  mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications" "$LIBDIR"
   pkill -x umless 2>/dev/null || true
-  install -m 755 "$BIN" "$HOME/.local/bin/umless"
+  install -m 755 "$BIN" "$LIBDIR/umless"
+  cp -P target/release/*.so* "$LIBDIR/" 2>/dev/null || true
+  ln -sf "$LIBDIR/umless" "$HOME/.local/bin/umless"
   {
     echo "[Desktop Entry]"
     echo "Type=Application"

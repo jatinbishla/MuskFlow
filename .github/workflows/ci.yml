@@ -58,3 +58,12 @@ jobs:
         run: |
           ./target/release/umless --help
           ./target/release/umless models list || true
+
+      # Loads the speech model and the LLM in one process, as every command does.
+      # (The full three-tier bench runs in the Tiers workflow.)
+      - name: Lite end to end
+        shell: bash
+        run: |
+          ./target/release/umless models install lite
+          echo "um so I think we should uh ship it on friday" | ./target/release/umless --tier lite clean
+          ./target/release/umless --tier lite transcribe "$(ls models/*/test_wavs/*.wav | head -1)"
