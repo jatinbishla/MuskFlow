@@ -11,10 +11,17 @@ cpal.workspace = true
 rtrb.workspace = true
 crossbeam-channel.workspace = true
 hound.workspace = true
-sherpa-onnx.workspace = true
 log.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-av-foundation = { version = "0.3.2", default-features = false, features = ["std", "block2", "AVCaptureDevice", "AVMediaFormat"] }
 block2 = "0.6.2"
 objc2 = "0.6.5"
+
+# Shared on Windows and Linux: static sherpa-onnx (with its bundled onnxruntime) clashes
+# with llama.cpp there (Windows: /MT vs /MD link errors; Linux: free(): invalid pointer).
+[target.'cfg(any(windows, target_os = "linux"))'.dependencies]
+sherpa-onnx = { workspace = true, features = ["shared"] }
+
+[target.'cfg(not(any(windows, target_os = "linux")))'.dependencies]
+sherpa-onnx = { workspace = true, features = ["static"] }

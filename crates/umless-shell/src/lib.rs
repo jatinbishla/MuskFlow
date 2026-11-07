@@ -1,5 +1,7 @@
-//! Umless's macOS shell: a menu-bar icon, a small "Listening" pill near the
-//! bottom of the screen, start/stop sounds, and Launch at Login.
+//! Umless's desktop shell: a menu-bar icon (a tray icon on Windows and Linux), a small
+//! "Listening" pill near the bottom of the screen, start/stop sounds, and Launch at Login.
+//! macOS uses AppKit directly; Windows and Linux use tao + wry + tray-icon (`desktop.rs`),
+//! behind the default `gui` feature (Linux needs GTK 3 and WebKitGTK 4.1 to build it).
 //!
 //! AppKit must run on the main thread, so [`run`] takes over the main thread and
 //! runs the dictation loop on a worker thread. The worker reports progress through
@@ -44,6 +46,8 @@ pub struct Config {
     pub backend: Backend,
     /// Open the window as soon as the app starts.
     pub open_window: bool,
+    /// What to hold, for the tray menu on Windows and Linux ("Ctrl + Win"). macOS says Fn.
+    pub hold_key: String,
 }
 
 /// Whether Umless starts when the user logs in. Main thread only.
@@ -622,7 +626,18 @@ mod imp {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(feature = "gui", any(windows, target_os = "linux")))]
+#[path = "desktop.rs"]
+mod imp;
+
+#[cfg(all(feature = "gui", any(windows, target_os = "linux")))]
+mod sound;
+
+/// No desktop UI (another OS, or built without the `gui` feature): run headless.
+#[cfg(not(any(
+    target_os = "macos",
+    all(feature = "gui", any(windows, target_os = "linux"))
+)))]
 mod imp {
     use super::{Config, State, Ui};
 
@@ -635,7 +650,7 @@ mod imp {
     }
 
     pub fn set_launch_at_login(_on: bool) -> anyhow::Result<()> {
-        anyhow::bail!("launch at login is macOS-only for now")
+        anyhow::bail!("launch at login needs the desktop app (the `gui` feature)")
     }
 
     pub fn run(_config: Config, work: impl FnOnce(Ui) + Send + 'static) -> ! {

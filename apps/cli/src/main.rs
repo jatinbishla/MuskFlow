@@ -5,6 +5,7 @@ mod bench;
 mod history;
 mod hub;
 mod learn;
+mod paths;
 mod settings;
 
 use std::io::{BufRead, Write};
@@ -108,11 +109,16 @@ enum Cmd {
         save: Option<PathBuf>,
     },
     /// Run in the background: hold Fn anywhere to dictate, and the cleaned text is typed at
-    /// your cursor. Fn + Control is command mode. macOS; needs Input Monitoring and Accessibility.
+    /// your cursor. Fn + Control is command mode. macOS needs Input Monitoring and
+    /// Accessibility. Windows and Linux: hold Ctrl + Win (UMLESS_HOLD_KEY to change it);
+    /// + Alt is command mode.
     App {
         /// Input device: part of its name or id (see `umless devices`). Default: system input.
         #[arg(long)]
         mic: Option<String>,
+        /// Open the Umless window at start (Umless.app always does).
+        #[arg(long)]
+        window: bool,
     },
     /// List microphones.
     Devices,
@@ -192,7 +198,7 @@ enum ModelsCmd {
 }
 
 fn main() -> Result<()> {
-    if app::in_app_bundle() {
+    if app::in_app_bundle() || app::detach_console() {
         app::log_to_file();
     }
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
@@ -200,7 +206,10 @@ fn main() -> Result<()> {
     let cmd = match &cli.cmd {
         Some(cmd) => cmd,
         // Double-clicked Umless.app: macOS starts the binary with no arguments.
-        None if app::in_app_bundle() => &Cmd::App { mic: None },
+        None if app::in_app_bundle() => &Cmd::App {
+            mic: None,
+            window: true,
+        },
         None => {
             use clap::CommandFactory;
             Cli::command().print_help()?;
@@ -215,7 +224,7 @@ fn main() -> Result<()> {
         } => transcribe(&cli.common, wavs, *no_vad, *words),
         Cmd::Stream { wav, fast } => stream(&cli.common, wav, *fast),
         Cmd::Listen { mic, save } => listen(&cli.common, mic.as_deref(), save.as_deref()),
-        Cmd::App { mic } => app::run(&cli.common, mic.as_deref()),
+        Cmd::App { mic, window } => app::run(&cli.common, mic.as_deref(), *window),
         Cmd::Devices => devices(),
         Cmd::Models {
             action: ModelsCmd::Install { tiers },

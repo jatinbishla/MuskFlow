@@ -1,0 +1,75 @@
+# Every tier on every OS: downloads Lite, Standard and Max and runs `umless bench` on the
+# synthetic clips (made with macOS `say` on the macOS job and shared with the others).
+# Heavy (~5.5 GB of models per OS), so it runs on demand and on pull requests.
+name: Tiers
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: tiers-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  clips:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - run: scripts/make-bench-clips.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: clips
+          path: bench/clips
+
+  bench:
+    needs: clips
+    name: bench ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Linux packages
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake clang libclang-dev pkg-config libasound2-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      # sherpa-onnx downloads its prebuilt libraries into target/sherpa-onnx-prebuilt, which
+      # the cache doesn't keep; rerun its build script when they're gone.
+      - name: Refresh sherpa-onnx libraries
+        shell: bash
+        run: |
+          if [ ! -d target/sherpa-onnx-prebuilt ]; then
+            cargo clean --release -p sherpa-onnx-sys || true
+          fi
+      - name: Build (CLI only)
+        run: cargo build --release --locked -p umless-cli --no-default-features
+      - uses: actions/download-artifact@v4
+        with:
+          name: clips
+          path: bench/clips
+      - name: Models (lite, standard, max)
+        shell: bash
+        run: ./target/release/umless models install lite standard max
+      - name: Bench every tier
+        shell: bash
+        run: ./target/release/umless bench --tiers lite,standard,max --fast --out bench-${{ runner.os }}.json
+      - name: Clean with each tier's LLM
+        shell: bash
+        run: |
+          for t in lite standard max; do
+            echo "um so I think we should uh ship it on friday" | ./target/release/umless --tier $t clean
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-${{ runner.os }}
+          path: bench-${{ runner.os }}.json

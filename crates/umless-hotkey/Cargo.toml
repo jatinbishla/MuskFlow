@@ -1,6 +1,6 @@
 [package]
 name = "umless-hotkey"
-description = "Global push-to-talk hotkey (Fn, Fn+Control) for Umless"
+description = "Global push-to-talk hotkey (Fn on macOS, a configurable hold key on Windows and Linux) for Umless"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -13,3 +13,10 @@ log.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-core-foundation = "0.3.2"
 objc2-core-graphics = "0.3.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+evdev = "0.13"
+x11rb = { version = "0.13", features = ["record"] }

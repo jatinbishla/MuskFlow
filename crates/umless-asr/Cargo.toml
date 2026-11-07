@@ -8,5 +8,12 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 umless-audio.workspace = true
-sherpa-onnx.workspace = true
 log.workspace = true
+
+# Shared on Windows and Linux: static sherpa-onnx (with its bundled onnxruntime) clashes
+# with llama.cpp there (Windows: /MT vs /MD link errors; Linux: free(): invalid pointer).
+[target.'cfg(any(windows, target_os = "linux"))'.dependencies]
+sherpa-onnx = { workspace = true, features = ["shared"] }
+
+[target.'cfg(not(any(windows, target_os = "linux")))'.dependencies]
+sherpa-onnx = { workspace = true, features = ["static"] }
