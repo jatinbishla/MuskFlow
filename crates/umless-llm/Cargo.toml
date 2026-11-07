@@ -5,6 +5,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# GPU offload for the cleanup LLM on Windows and Linux (macOS always uses Metal).
+# CPU is the default; build with e.g. `cargo build --release --features vulkan`.
+cuda = ["llama-cpp-2/cuda"]
+vulkan = ["llama-cpp-2/vulkan"]
+rocm = ["llama-cpp-2/rocm"]
+
 [dependencies]
 anyhow.workspace = true
 log.workspace = true
